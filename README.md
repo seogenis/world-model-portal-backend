@@ -9,7 +9,8 @@ An intelligent prompt tuning agent for NVIDIA's Cosmos text-to-video model that 
 - **Prompt Updating**: Make minimal, focused changes to prompts based on user requests
 - **Prompt Variations**: Generate creative alternatives to explore different options
 - **Video Generation**: Generate videos using NVIDIA's Cosmos API
-- **Real-time Updates**: WebSocket support for real-time generation status
+- **Status Updates**: Reliable status polling for generation progress
+- **Multi-GPU Batch Inference**: Generate multiple videos simultaneously across multiple GPUs
 
 ## Architecture
 
@@ -80,11 +81,11 @@ To expose your server to the internet, you can use ngrok:
 ### Video Generation
 
 - `POST /api/video/single_inference`: Generate a video from a text prompt
-- `WebSocket /ws/video/{job_id}`: Get real-time updates about video generation
+- `GET /api/video/status/{job_id}`: Poll for video generation status updates
 
-## WebSocket Status Updates
+## Video Status Updates
 
-The WebSocket connection provides real-time updates on the video generation process:
+The status polling endpoint provides updates on the video generation process:
 
 1. **pending**: Initial job status (queued)
 2. **generating**: Video generation in progress (NVIDIA API processing)
@@ -94,13 +95,11 @@ The WebSocket connection provides real-time updates on the video generation proc
 
 ## Frontend Examples
 
-Check the `frontend_examples` directory for HTML examples:
+The `frontend_examples` directory contains the following ready-to-use HTML examples:
 
-- `video_generator.html`: Basic video generation interface
-- `websocket_example.html`: Example showing WebSocket updates
-- `prompt_enhancer.html`: Interface for enhancing prompts
-- `prompt_variations.html`: Interface for generating prompt variations
-- `full_interface.html`: Complete interface with all features
+- `video_generator_complete.html`: **Recommended comprehensive example** that includes both single and batch video generation with polling
+- `polling_example.html`: Minimal example showing the polling implementation pattern
+- `batch_video_generator.html`: Legacy example retained for reference (using polling)
 
 ## CLI Simulator
 
@@ -144,13 +143,22 @@ This project is ready to be deployed on a Brev server instance:
 │   ├── api/                 # API routes and schemas
 │   ├── core/                # Core config and utilities 
 │   ├── services/            # Business logic services
+│   │   ├── batch_inference_service.py  # Multi-GPU batch inference
+│   │   ├── parameter_extractor.py      # Extract parameters from prompts
+│   │   ├── prompt_manager.py           # Manage prompt refinement
+│   │   └── video_service.py            # Interface with Cosmos API
 │   ├── utils/               # Helper utilities
 │   └── main.py              # FastAPI application
+├── batch_inference.py       # Standalone batch inference script
+├── example_prompts.json     # Example prompts for batch inference
 ├── frontend_examples/       # HTML demo interfaces
 ├── static/                  # Static files directory
 │   └── videos/              # Generated videos
 ├── requirements.txt         # Python dependencies
+├── start_batch_server.sh    # Start server with batch inference
 ├── start_ngrok.sh           # Script to start ngrok
+├── test_batch_inference.py  # Test script for batch inference
+├── BATCH_INFERENCE.md       # Documentation for batch inference
 └── README.md                # Project documentation
 ```
 
@@ -178,6 +186,18 @@ The video generation process utilizes NVIDIA's Cosmos Text2World model:
 4. Server calls NVIDIA Cosmos API and monitors the generation process
 5. Generated video is extracted from the resulting ZIP file and made available
 6. Client receives the video URL via WebSocket when generation is complete
+
+### Batch Video Generation
+
+For high-throughput scenarios, the system supports batch video generation:
+
+1. Submit up to 8 prompts via the batch inference API endpoint
+2. Each prompt is assigned to a different GPU for parallel execution
+3. A batch ID is returned for tracking all jobs in the batch
+4. Real-time status updates are provided via WebSocket
+5. All generated videos are tracked in a single batch response
+
+For more details, see [BATCH_INFERENCE.md](BATCH_INFERENCE.md).
 
 ## License
 

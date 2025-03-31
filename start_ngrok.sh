@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Starting ngrok tunnel to your FastAPI server on port 8000..."
+echo "Starting ngrok tunnel to your FastAPI server on port 8001..."
 echo "The public URL will be displayed below."
 echo "Use this URL to access your API from any network."
 echo ""
@@ -10,4 +10,4 @@ echo ""
 echo "Press Ctrl+C to stop the tunnel when you're done."
 
 # Start ngrok
-ngrok http 8000
+ngrok http 8001

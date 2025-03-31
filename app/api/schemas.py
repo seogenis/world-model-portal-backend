@@ -89,8 +89,8 @@ class BatchVideoGenerationRequest(BaseModel):
     def prompts_must_be_reasonable(cls, v):
         if not v:
             raise ValueError('At least one prompt must be provided')
-        if len(v) > 10:
-            raise ValueError('Maximum 10 prompts allowed in a batch')
+        if len(v) > 8:
+            raise ValueError('Maximum 8 prompts allowed in a batch')
         return v
 
 
@@ -103,9 +103,32 @@ class VideoStatusResponse(BaseModel):
     video_url: Optional[str] = Field(None, description="URL to the generated video if complete")
 
 
+class BatchJobStatus(BaseModel):
+    """Status information for a single job in a batch."""
+    job_id: str = Field(..., description="Unique identifier for this specific job")
+    status: VideoStatus = Field(..., description="Current status of the video generation")
+    message: str = Field("", description="Status message or error details")
+    progress: int = Field(0, description="Progress percentage (0-100)")
+    video_url: Optional[str] = Field(None, description="URL to the generated video if complete")
+    gpu_id: int = Field(..., description="GPU ID used for this job")
+    prompt: str = Field(..., description="The prompt used for this job")
+
+
+class BatchStatus(str, Enum):
+    """Status of batch processing."""
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    PARTIAL = "partial"
+    NOT_FOUND = "not_found"
+
+
 class BatchVideoStatusResponse(BaseModel):
     """Response model for batch video generation status."""
-    job_ids: List[str] = Field(..., description="List of job ids for each video in the batch")
-    statuses: List[VideoStatusResponse] = Field(..., description="Status information for each video")
-
-
+    batch_id: str = Field(..., description="Unique identifier for the batch")
+    status: str = Field(..., description="Overall batch status (processing, complete, failed, partial)")
+    total: int = Field(..., description="Total number of jobs in the batch")
+    completed: int = Field(0, description="Number of completed jobs")
+    failed: int = Field(0, description="Number of failed jobs")
+    message: Optional[str] = Field(None, description="Overall status message")
+    jobs: List[BatchJobStatus] = Field(..., description="Status information for each job in the batch")

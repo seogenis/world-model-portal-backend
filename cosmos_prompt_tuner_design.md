@@ -1,8 +1,10 @@
-# Cosmos Prompt Tuning Agent - Design Document
+# Cosmos Prompt Tuning Design Reference
+
+> Note: This is a reference design document that outlines the original concept. The actual implementation may differ. For current implementation details, see README.md and the source code.
 
 ## Overview
 
-This document outlines the design for a prompt-tuning agent for NVIDIA's Cosmos text-to-video model. The agent will help users refine and modify text prompts for video generation through intuitive interactions, modularizing prompts into parameters that can be independently modified.
+This document outlines the design for a prompt-tuning agent for NVIDIA's Cosmos text-to-video model. The agent helps users refine and modify text prompts for video generation through intuitive interactions, modularizing prompts into parameters that can be independently modified.
 
 ## Goals
 

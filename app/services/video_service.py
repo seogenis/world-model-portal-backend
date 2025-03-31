@@ -6,9 +6,9 @@ import zipfile
 import shutil
 import requests
 import time
-from typing import Dict, Optional, Tuple
-from fastapi import WebSocket
 import json
+from typing import Dict, Optional, Tuple, Any
+from fastapi import WebSocket
 
 from app.core.logger import get_logger
 from app.core.config import get_settings
@@ -16,8 +16,7 @@ from app.core.config import get_settings
 logger = get_logger()
 settings = get_settings()
 
-# In-memory store for job statuses
-video_jobs = {}
+# In-memory store for job statuses (moved inside the class)
 
 class VideoService:
     """Service for handling video generation requests using Nvidia's API."""
@@ -32,6 +31,8 @@ class VideoService:
             "Authorization": f"Bearer {self.nvidia_api_key}",
             "Accept": "application/json",
         }
+        # In-memory store for job statuses
+        self.video_jobs: Dict[str, Dict[str, Any]] = {}
         
     async def generate_video(self, prompt: str, websocket: Optional[WebSocket] = None) -> str:
         """
@@ -46,9 +47,22 @@ class VideoService:
         """
         job_id = str(uuid.uuid4())
         
-        # Start video generation in background task
-        asyncio.create_task(self._process_video_generation(job_id, prompt, websocket))
+        # Initialize job in memory store immediately
+        self.video_jobs[job_id] = {
+            "status": "pending",
+            "message": "Job queued and will start soon",
+            "progress": 0,
+            "video_url": None
+        }
         
+        # Start video generation in a fully detached background task
+        # This ensures it won't block the main application thread
+        task = asyncio.create_task(self._process_video_generation(job_id, prompt, websocket))
+        
+        # Detach the task to ensure it runs independently
+        task.add_done_callback(lambda _: None)
+        
+        # Return job_id immediately without waiting for video generation
         return job_id
         
     async def _process_video_generation(self, job_id: str, prompt: str, websocket: Optional[WebSocket] = None) -> None:
@@ -141,27 +155,78 @@ class VideoService:
                 })
             
             # Create directory for storing the video
-            os.makedirs(f"static/videos/{job_id}", exist_ok=True)
+            output_dir = f"static/videos/{job_id}"
+            os.makedirs(output_dir, exist_ok=True)
             
-            # Save the ZIP file
-            zip_path = f"static/videos/{job_id}/result.zip"
-            with open(zip_path, 'wb') as f:
-                f.write(response.content)
-            
-            # Extract the video file
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(f"static/videos/{job_id}")
-            
-            # Check if video.mp4 exists in the extracted files
-            video_path = f"static/videos/{job_id}/video.mp4"
-            if not os.path.exists(video_path):
-                # Look for any .mp4 file in the extracted directory
-                for root, _, files in os.walk(f"static/videos/{job_id}"):
-                    for file in files:
-                        if file.endswith(".mp4"):
-                            # Move or copy the file to the expected location
-                            shutil.copy(os.path.join(root, file), video_path)
-                            break
+            try:
+                # Check if response content is a zip file
+                content_type = response.headers.get('Content-Type', '')
+                if 'zip' in content_type.lower() or response.content[:4] == b'PK\x03\x04':
+                    # Save the ZIP file
+                    zip_path = f"{output_dir}/result.zip"
+                    with open(zip_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    # Extract the video file
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(output_dir)
+                    
+                    # Look for video.mp4 in the extracted files
+                    video_path = f"{output_dir}/video.mp4"
+                    
+                    # If it doesn't exist, look for any .mp4 file
+                    if not os.path.exists(video_path):
+                        mp4_files = []
+                        for root, _, files in os.walk(output_dir):
+                            for file in files:
+                                if file.endswith(".mp4"):
+                                    mp4_files.append(os.path.join(root, file))
+                        
+                        if mp4_files:
+                            # Use the first found mp4 file
+                            shutil.copy(mp4_files[0], video_path)
+                        else:
+                            raise FileNotFoundError("No mp4 files found in extracted zip")
+                else:
+                    # Not a zip file, check if it's directly an mp4
+                    content_start = response.content[:16]
+                    is_mp4 = False
+                    
+                    # Check for mp4 file signature (ftyp...)
+                    if len(content_start) > 8 and content_start[4:8] == b'ftyp':
+                        is_mp4 = True
+                    
+                    if is_mp4 or 'video/mp4' in content_type.lower():
+                        # Direct mp4 file, save it
+                        video_path = f"{output_dir}/video.mp4"
+                        with open(video_path, 'wb') as f:
+                            f.write(response.content)
+                    else:
+                        # Unknown format, save response for inspection
+                        error_file = f"{output_dir}/response.bin"
+                        with open(error_file, 'wb') as f:
+                            f.write(response.content)
+                        
+                        # Save headers for debugging
+                        with open(f"{output_dir}/headers.json", 'w') as f:
+                            json.dump(dict(response.headers), f, indent=2)
+                            
+                        raise ValueError(f"Response is not a zip or mp4 file. Content-Type: {content_type}")
+            except zipfile.BadZipFile:
+                # Not a valid zip file, could be direct mp4 or error response
+                # Try to save as mp4
+                video_path = f"{output_dir}/video.mp4"
+                with open(video_path, 'wb') as f:
+                    f.write(response.content)
+                
+                # Check if it's a valid mp4
+                if not os.path.exists(video_path) or os.path.getsize(video_path) < 1000:
+                    # Too small to be a real video, probably error response
+                    error_file = f"{output_dir}/response.txt"
+                    with open(error_file, 'wb') as f:
+                        f.write(response.content)
+                    
+                    raise ValueError(f"Response appears to be error data, not a valid video")
             
             # Create a URL for the video file
             video_url = f"/static/videos/{job_id}/video.mp4"
@@ -176,7 +241,7 @@ class VideoService:
                 })
             
             # Store the result in the in-memory store
-            video_jobs[job_id] = {
+            self.video_jobs[job_id] = {
                 "status": "complete",
                 "message": "Video generation complete",
                 "progress": 100,
@@ -195,7 +260,7 @@ class VideoService:
                 })
             
             # Store the error in the in-memory store
-            video_jobs[job_id] = {
+            self.video_jobs[job_id] = {
                 "status": "failed",
                 "message": f"Error generating video: {str(e)}",
                 "progress": 0
