@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Video Generation Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .container {
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .log-container {
+            background-color: #f0f0f0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            margin-top: 20px;
+            font-family: monospace;
+        }
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .status {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .pending { color: #FFA500; }
+        .generating { color: #0066CC; }
+        .processing { color: #9900CC; }
+        .complete { color: #00AA00; }
+        .failed { color: #CC0000; }
+        progress {
+            width: 100%;
+            height: 20px;
+            margin-top: 10px;
+        }
+        #videoContainer {
+            margin-top: 20px;
+            display: none;
+        }
+        video {
+            width: 100%;
+            max-height: 400px;
+            border-radius: 4px;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Video Generation Example</h1>
+    
+    <div class="container">
+        <h2>Generate Video with WebSocket Updates</h2>
+        <textarea id="promptInput" placeholder="Enter your text-to-video prompt here...">A first person view from the perspective of a human sized robot as it works in a chemical plant. Many boxes and supplies nearby on the industrial shelves. The camera moving forward, at a height of 1m above the floor. Photorealistic.</textarea>
+        <div>
+            <button id="generateBtn">Generate Video</button>
+            <button id="clearLogBtn">Clear Log</button>
+        </div>
+        
+        <div id="statusContainer">
+            <h3>Connection Status: <span id="connectionStatus">Disconnected</span></h3>
+            <progress id="progressBar" value="0" max="100"></progress>
+        </div>
+        
+        <div id="videoContainer">
+            <h3>Generated Video</h3>
+            <video id="videoPlayer" controls>
+                Your browser does not support the video tag.
+            </video>
+        </div>
+        
+        <h3>WebSocket Log</h3>
+        <div id="logContainer" class="log-container"></div>
+    </div>
+    
+    <div class="container">
+        <h2>Code Example</h2>
+        <p>Here's how to connect to the WebSocket and handle updates:</p>
+        <pre><code>// Initialize WebSocket connection
+const socket = new WebSocket(`ws://your-host/ws/video/${jobId}`);
+
+// Connection opened
+socket.onopen = function(event) {
+    console.log('WebSocket connection established');
+};
+
+// Listen for messages
+socket.onmessage = function(event) {
+    const update = JSON.parse(event.data);
+    console.log('Received update:', update);
+    
+    // Update UI based on status
+    updateStatus(update.status, update.message);
+    updateProgress(update.progress);
+    
+    // If video is complete, show it
+    if (update.status === 'complete' && update.video_url) {
+        displayVideo(update.video_url);
+    }
+};
+
+// Connection closed
+socket.onclose = function(event) {
+    if (!event.wasClean) {
+        console.error('WebSocket connection closed unexpectedly');
+    }
+};
+
+// Connection error
+socket.onerror = function(error) {
+    console.error(`WebSocket error: ${error.message}`);
+};</code></pre>
+    </div>
+    
+    <script>
+        // Set up API URL based on environment
+        const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+            ? `http://${window.location.host}/api` 
+            : `https://${window.location.host}/api`;
+        
+        // Get DOM elements
+        const promptInput = document.getElementById('promptInput');
+        const generateBtn = document.getElementById('generateBtn');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const progressBar = document.getElementById('progressBar');
+        const logContainer = document.getElementById('logContainer');
+        const videoContainer = document.getElementById('videoContainer');
+        const videoPlayer = document.getElementById('videoPlayer');
+        
+        let socket = null;
+        
+        // Add event listeners
+        generateBtn.addEventListener('click', startVideoGeneration);
+        clearLogBtn.addEventListener('click', clearLog);
+        
+        // Start video generation
+        async function startVideoGeneration() {
+            // Validate input
+            if (!promptInput.value.trim()) {
+                alert('Please enter a prompt');
+                return;
+            }
+            
+            // Reset UI
+            generateBtn.disabled = true;
+            progressBar.value = 0;
+            videoContainer.style.display = 'none';
+            connectionStatus.textContent = 'Connecting...';
+            
+            try {
+                // Log the action
+                addLogEntry('info', 'Starting video generation...');
+                
+                // Call API to start video generation
+                const response = await fetch(`${API_BASE_URL}/video/single_inference`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        prompt: promptInput.value.trim()
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                addLogEntry('info', `Job created with ID: ${data.job_id}`);
+                
+                // Connect to WebSocket for updates
+                connectWebSocket(data.job_id);
+                
+            } catch (error) {
+                addLogEntry('error', `Error: ${error.message}`);
+                connectionStatus.textContent = 'Error';
+                generateBtn.disabled = false;
+            }
+        }
+        
+        // Connect to WebSocket
+        function connectWebSocket(jobId) {
+            // Close existing connection if any
+            if (socket) {
+                socket.close();
+            }
+            
+            // Determine WebSocket URL
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/video/${jobId}`;
+            
+            addLogEntry('info', `Connecting to WebSocket: ${wsUrl}`);
+            
+            // Create new WebSocket connection
+            socket = new WebSocket(wsUrl);
+            
+            // Set up event handlers
+            socket.onopen = function(event) {
+                connectionStatus.textContent = 'Connected';
+                addLogEntry('info', 'WebSocket connection established');
+            };
+            
+            socket.onmessage = function(event) {
+                const update = JSON.parse(event.data);
+                
+                // Log the update
+                addLogEntry(update.status, `${update.status}: ${update.message} (${update.progress}%)`);
+                
+                // Update progress bar
+                progressBar.value = update.progress;
+                
+                // If video is complete, show it
+                if (update.status === 'complete' && update.video_url) {
+                    videoPlayer.src = update.video_url;
+                    videoContainer.style.display = 'block';
+                    addLogEntry('complete', `Video available at: ${update.video_url}`);
+                    generateBtn.disabled = false;
+                }
+                
+                // If there was an error
+                if (update.status === 'failed') {
+                    connectionStatus.textContent = 'Failed';
+                    generateBtn.disabled = false;
+                }
+            };
+            
+            socket.onclose = function(event) {
+                connectionStatus.textContent = 'Disconnected';
+                if (!event.wasClean) {
+                    addLogEntry('error', 'WebSocket connection closed unexpectedly');
+                } else {
+                    addLogEntry('info', 'WebSocket connection closed');
+                }
+            };
+            
+            socket.onerror = function(error) {
+                connectionStatus.textContent = 'Error';
+                addLogEntry('error', `WebSocket error: ${error.message}`);
+                generateBtn.disabled = false;
+            };
+        }
+        
+        // Add log entry
+        function addLogEntry(status, message) {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            
+            const timestamp = new Date().toLocaleTimeString();
+            
+            const statusSpan = document.createElement('span');
+            statusSpan.className = `status ${status}`;
+            statusSpan.textContent = status.toUpperCase();
+            
+            entry.appendChild(statusSpan);
+            entry.appendChild(document.createTextNode(`[${timestamp}] ${message}`));
+            
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+        
+        // Clear log
+        function clearLog() {
+            logContainer.innerHTML = '';
+        }
+    </script>
+</body>
+</html>

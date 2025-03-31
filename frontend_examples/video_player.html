@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Player</title>
+    <style>
+        .video-container {
+            margin-top: 20px;
+        }
+        .video-list {
+            margin-top: 20px;
+        }
+        .video-item {
+            cursor: pointer;
+            padding: 5px;
+            margin: 5px 0;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+        }
+        video {
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <h1>Video Player</h1>
+    
+    <button onclick="loadVideos()">Load Available Videos</button>
+    
+    <div class="video-container">
+        <video id="videoPlayer" controls width="640"></video>
+    </div>
+    
+    <div class="video-list" id="videoList"></div>
+    
+    <script>
+        const API_BASE_URL = 'http://172.31.17.25:8000'; // Use your actual IP address!
+        
+        // Load list of videos
+        function loadVideos() {
+            fetch(`${API_BASE_URL}/api/videos`)
+                .then(response => response.json())
+                .then(data => {
+                    const videoList = document.getElementById('videoList');
+                    videoList.innerHTML = '<h2>Available Videos</h2>';
+                    
+                    data.videos.forEach(video => {
+                        const videoItem = document.createElement('div');
+                        videoItem.className = 'video-item';
+                        videoItem.innerHTML = `
+                            <strong>${video.filename}</strong> (${video.size_mb} MB)
+                            <button onclick="playVideo('${video.url}')">Play</button>
+                        `;
+                        videoList.appendChild(videoItem);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching videos:', error);
+                    alert('Error loading videos. Check console for details.');
+                });
+        }
+        
+        // Play a video
+        function playVideo(videoUrl) {
+            const videoPlayer = document.getElementById('videoPlayer');
+            videoPlayer.src = `${API_BASE_URL}${videoUrl}`;
+            videoPlayer.play();
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Prompt Enhancer</title>
+    <style>
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin-bottom: 10px;
+            padding: 10px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Prompt Enhancer</h1>
+        
+        <textarea id="roughPrompt" placeholder="Enter your rough prompt here (e.g., 'Three drones flying over earthquake mountains cabin')"></textarea>
+        <button onclick="enhancePrompt()">Enhance Prompt</button>
+        
+        <div class="result" id="result">
+            <p><strong>Original Prompt:</strong> <span id="originalPrompt"></span></p>
+            <p><strong>Enhanced Prompt:</strong> <span id="enhancedPrompt"></span></p>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE_URL = 'http://172.31.17.25:8000'; // Use your actual IP address
+        
+        document.getElementById('result').style.display = 'none';
+        
+        function enhancePrompt() {
+            const roughPrompt = document.getElementById('roughPrompt').value;
+            
+            if (!roughPrompt) {
+                alert('Please enter a prompt to enhance.');
+                return;
+            }
+            
+            // Show loading state
+            document.getElementById('enhancedPrompt').textContent = 'Enhancing...';
+            document.getElementById('result').style.display = 'block';
+            document.getElementById('originalPrompt').textContent = roughPrompt;
+            
+            fetch(`${API_BASE_URL}/api/enhance`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    rough_prompt: roughPrompt
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('enhancedPrompt').textContent = data.enhanced_prompt;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('enhancedPrompt').textContent = 'Error enhancing prompt. Please try again.';
+            });
+        }
+    </script>
+</body>
+</html>
