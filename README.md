@@ -1,64 +1,72 @@
-# Cosmos Text2World Prompt Tuning API
+# World Model Portal Backend
 
-An intelligent prompt tuning agent for NVIDIA's Cosmos text-to-video model that helps users refine text prompts and generate videos through intuitive interactions.
+A high-performance backend for managing text-to-video generation using NVIDIA's Cosmos model with prompt tuning capabilities, asynchronous request handling, and multi-GPU batch processing.
 
-## Features
+## 🚀 Key Features
 
-- **Prompt Enhancement**: Convert rough ideas into detailed prompts
+- **Video Generation**: Generate high-quality videos from text prompts using NVIDIA's Cosmos model
+- **REST API Status Updates**: Efficient status tracking via stateless GET endpoints
+- **Multi-GPU Batch Processing**: Generate multiple videos in parallel across 8 GPUs
+- **Prompt Enhancement**: Convert basic concepts into detailed prompts
 - **Parameter Extraction**: Identify key parameters from text descriptions
-- **Prompt Updating**: Make minimal, focused changes to prompts based on user requests
+- **Prompt Updating**: Make targeted changes to prompts based on user requests
 - **Prompt Variations**: Generate creative alternatives to explore different options
-- **Video Generation**: Generate videos using NVIDIA's Cosmos API
-- **Status Updates**: Reliable status polling for generation progress
-- **Multi-GPU Batch Inference**: Generate multiple videos simultaneously across multiple GPUs
+- **Task Queue with Worker Pool**: Non-blocking request handling with background processing
+- **Rate Limiting**: Global semaphore to handle NVIDIA API rate limits
+- **Persistent Session Management**: In-memory session storage with disk persistence across restarts
+- **Filesystem-Based State Recovery**: Self-healing state recovery based on directory structure
 
-## Architecture
+## ⚙️ Architecture
 
 The system consists of these main components:
 
-1. **Parameter Extractor**: Analyzes prompts to identify key parameters
-2. **Prompt Manager**: Tracks parameters, handles user modification requests, and manages prompt history
-3. **Prompt Enhancer**: Transforms rough prompts into detailed, descriptive content 
-4. **Variation Generator**: Creates alternative versions of prompts based on selected examples
-5. **Video Service**: Interfaces with NVIDIA's Cosmos API to generate videos
-6. **API Layer**: Exposes functionality through REST endpoints with WebSocket support
+1. **FastAPI Backend**: High-performance asynchronous API routes with RESTful endpoints
+2. **Parameter Extractor**: Analyzes prompts to identify key parameters using OpenAI models
+3. **Prompt Manager**: Tracks parameters, handles user modification requests, maintains prompt history
+4. **Video Service**: Interfaces with NVIDIA's Cosmos API with retry logic and rate limiting
+5. **Batch Inference Service**: Coordinates multi-GPU video generation with job distribution
+6. **Worker Pool**: Background task processing for non-blocking operations
+7. **State Recovery System**: Filesystem-based mechanism to recover status after restarts
 
-## Setup and Installation
+## 🛠 Setup and Installation
+
+### Prerequisites
+
+- Python 3.10+
+- NVIDIA API key for Cosmos model
+- OpenAI API key for prompt enhancement features
+- 8 GPUs for full batch processing capability (can run with fewer)
+
+### Installation
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/yourusername/cosmos-prompt-tuner.git
-   cd cosmos-prompt-tuner
+   git clone https://github.com/yourusername/world-model-portal-backend.git
+   cd world-model-portal-backend
    ```
 
-2. Create a virtual environment
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. Install dependencies
+2. Install dependencies
    ```bash
    pip install -r requirements.txt
    ```
 
-4. Create a `.env` file with your API keys:
+3. Create a `.env` file with your API keys:
    ```
    OPENAI_API_KEY=your_openai_api_key
    NVIDIA_API_KEY=your_nvidia_api_key
    ```
 
-## Running the Server
+### Running the Server
 
 ```bash
-# Start the server (development)
+# Start the server (development mode)
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Start the server (production)
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Start the server (production mode)
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
-## Using with ngrok
+### Using with ngrok for Public Access
 
 To expose your server to the internet, you can use ngrok:
 
@@ -67,137 +75,271 @@ To expose your server to the internet, you can use ngrok:
 ./start_ngrok.sh
 ```
 
-## API Endpoints
+## 🔄 Asynchronous Processing
 
-### Prompt Management
+The backend uses an asynchronous processing architecture to handle long-running operations without blocking API responses:
 
-- `POST /api/enhance`: Enhance a rough prompt with descriptive details
-- `POST /api/initialize`: Initialize a new prompt
-- `POST /api/update`: Update parameters based on user request
-- `GET /api/history`: Get history of all prompts
-- `POST /api/generate-variations`: Generate variations of selected prompts
-- `GET /api/parameters`: Get current parameters
+1. **Request Queue**: Incoming requests are added to queues for processing
+2. **Worker Pools**: Background workers process jobs from the queues
+3. **Semaphore Rate Limiting**: Global semaphore controls NVIDIA API access (max 1 concurrent)
+4. **Stateless Status Endpoints**: Efficient RESTful endpoints with filesystem validation
+5. **Retry Mechanism**: Exponential backoff and retry for NVIDIA API rate limits
+6. **Filesystem State Recovery**: Directory structure used to recover state after service restarts
+
+## 🖥️ Key API Endpoints
 
 ### Video Generation
 
 - `POST /api/video/single_inference`: Generate a video from a text prompt
-- `GET /api/video/status/{job_id}`: Poll for video generation status updates
+- `GET /api/video/status/{job_id}`: Get video generation status with filesystem validation
 
-## Video Status Updates
+### Batch Processing
 
-The status polling endpoint provides updates on the video generation process:
+- `POST /api/video/batch_inference`: Process multiple prompts in parallel (up to 8 GPUs)
+- `GET /api/video/batch_status/{batch_id}`: Get batch status with comprehensive filesystem scanning
+- `GET /api/video/batch_download/{batch_id}`: Download all batch videos as ZIP
 
-1. **pending**: Initial job status (queued)
-2. **generating**: Video generation in progress (NVIDIA API processing)
-3. **processing**: Processing video files (extracting from zip)
-4. **complete**: Video generation complete (with video URL)
-5. **failed**: Video generation failed (with error message)
+### Prompt Management
 
-## Frontend Examples
+- `POST /api/enhance`: Enhance a rough prompt with descriptive details
+- `POST /api/initialize`: Extract parameters from a prompt
+- `POST /api/update`: Update prompt based on user request
+- `POST /api/generate-variations`: Generate variations of selected prompts
+- `GET /api/parameters`: Get current parameters
+- `GET /api/history`: Get prompt history
 
-The `frontend_examples` directory contains the following ready-to-use HTML examples:
+### Static Files
 
-- `video_generator_complete.html`: **Recommended comprehensive example** that includes both single and batch video generation with polling
-- `polling_example.html`: Minimal example showing the polling implementation pattern
-- `batch_video_generator.html`: Legacy example retained for reference (using polling)
+- `GET /api/videos/{video_id}`: Retrieve a generated video
+- `GET /static/*`: Static files (HTML, videos, etc.)
 
-## CLI Simulator
+## 🛠️ Key Components
 
-For testing the prompt tuning functionality, you can use the CLI simulator:
+### NVIDIA API Interaction
 
-```bash
-# Interactive Mode
-python cli_simulator.py interactive
+The system interacts with NVIDIA's Cosmos API for video generation:
 
-# Enhance a rough prompt
-python cli_simulator.py enhance "Three drones flying over earthquake mountains cabin"
-
-# Initialize with a prompt
-python cli_simulator.py initialize "At dawn, three matte-black quad-rotor drones hover over a landslide-stricken mountain slope."
-
-# Update a prompt
-python cli_simulator.py update "make it night time"
-
-# Generate variations from selected prompts (by index)
-python cli_simulator.py variations 0,2 8
-
-# View prompt history
-python cli_simulator.py history
+```python
+# Core interaction with rate limiting and retry logic
+async with nvidia_api_semaphore:  # Global semaphore limits to 1 concurrent request
+    # Send request to NVIDIA API with retry for rate limiting
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            # Send API request...
+            if response.status_code == 429:  # Rate limited
+                # Exponential backoff and retry
+                await asyncio.sleep(retry_delay)
+                retry_count += 1
+                continue
+            break  # Success
+        except Exception as e:
+            # Handle errors...
 ```
 
-## Deploying on Brev
+### Filesystem-Based Status Recovery
 
-This project is ready to be deployed on a Brev server instance:
+The system prioritizes filesystem evidence over in-memory status for robust state recovery:
 
-1. Clone the repository on your Brev instance
-2. Install dependencies with `pip install -r requirements.txt`
-3. Set up environment variables in a `.env` file with your API keys
-4. Run the server with `uvicorn app.main:app --host 0.0.0.0 --port 8000`
-5. The server will be available at the Brev instance's public IP/domain
+```python
+# Enhanced status endpoint with filesystem validation
+@router.get("/video/status/{job_id}")
+async def get_video_status(job_id: str, video_service: VideoService = Depends(get_video_service)):
+    try:
+        # First, check if the video file exists directly in the expected static path
+        static_path = f"/static/videos/{job_id}/video.mp4"
+        actual_file_path = Path(static_path.lstrip('/'))
+        
+        if actual_file_path.exists():
+            # Video file exists at the expected location, job is complete
+            logger.info(f"Found completed video file for job {job_id} at {static_path}")
+            return VideoStatusResponse(
+                job_id=job_id,
+                status="complete",
+                message=f"Video generation complete. Video available at: {static_path}",
+                progress=100,
+                video_url=static_path
+            )
+            
+        # If not found, check other possible locations and states
+        # (directory exists, legacy format, batch directory, etc.)
+        
+        # Only check in-memory status as last resort
+        if hasattr(video_service, 'video_jobs') and job_id in video_service.video_jobs:
+            # Return status from video_service if available
+            status_data = video_service.video_jobs[job_id]
+            return VideoStatusResponse(...)
+            
+        # Default fallback response if no state can be determined
+        return VideoStatusResponse(
+            job_id=job_id,
+            status="pending",
+            message=f"Job is queued or not found. Expected path when complete: {static_path}",
+            progress=10,
+            video_url=None
+        )
+    except Exception as e:
+        # Handle errors...
+```
 
-## Project Structure
+### Worker Pool for Background Processing
+
+Task queues and worker pools handle background processing without blocking:
+
+```python
+# Worker pool implementation
+async def _job_worker(self):
+    while True:
+        try:
+            # Get next job from queue with timeout
+            job_id, prompt, websocket = await self.job_queue.get()
+            
+            # Process job asynchronously
+            task = asyncio.create_task(
+                self._process_video_generation(job_id, prompt, websocket)
+            )
+            
+            # Continue processing other jobs
+        except Exception as e:
+            # Handle worker errors...
+```
+
+### Multi-GPU Batch Inference
+
+Batch processing distributes jobs across multiple GPUs:
+
+```python
+# Distribute jobs across GPUs
+for i, prompt in enumerate(prompts):
+    job_id = f"job_{i}"
+    gpu_id = i % self.num_gpus  # Assign to GPU
+    
+    # Start job on this GPU
+    task = asyncio.create_task(
+        self._process_single_job(batch_id, job_id, prompt, job_dir, gpu_id, websocket)
+    )
+```
+
+## 📂 Project Structure
 
 ```
 .
 ├── app/
 │   ├── api/                 # API routes and schemas
-│   ├── core/                # Core config and utilities 
+│   │   ├── routes.py        # FastAPI routes and REST endpoints
+│   │   └── schemas.py       # Pydantic models for API
+│   ├── core/                # Core configuration and utilities
+│   │   ├── config.py        # Application settings and semaphore
+│   │   └── logger.py        # Logging configuration
 │   ├── services/            # Business logic services
-│   │   ├── batch_inference_service.py  # Multi-GPU batch inference
+│   │   ├── batch_inference_service.py  # Multi-GPU batch processing
 │   │   ├── parameter_extractor.py      # Extract parameters from prompts
 │   │   ├── prompt_manager.py           # Manage prompt refinement
-│   │   └── video_service.py            # Interface with Cosmos API
+│   │   ├── session_manager.py          # Session persistence with disk storage
+│   │   └── video_service.py            # NVIDIA API interface with rate limiting
 │   ├── utils/               # Helper utilities
-│   └── main.py              # FastAPI application
-├── batch_inference.py       # Standalone batch inference script
-├── example_prompts.json     # Example prompts for batch inference
-├── frontend_examples/       # HTML demo interfaces
-├── static/                  # Static files directory
-│   └── videos/              # Generated videos
-├── requirements.txt         # Python dependencies
-├── start_batch_server.sh    # Start server with batch inference
+│   │   └── openai_utils.py  # OpenAI API helpers
+│   └── main.py              # FastAPI application entry point
+├── sessions/                # Persistent session storage directory
+├── static/                  # Static files
+│   ├── frontend_examples/   # Example HTML interfaces
+│   │   └── demo_complete.html  # Comprehensive demo UI
+│   └── videos/              # Generated videos storage
+├── API_DOCUMENTATION.md     # API documentation
+├── README.md                # Project documentation
+├── user_flow_instructions.txt # Frontend integration guide
 ├── start_ngrok.sh           # Script to start ngrok
-├── test_batch_inference.py  # Test script for batch inference
-├── BATCH_INFERENCE.md       # Documentation for batch inference
-└── README.md                # Project documentation
+└── requirements.txt         # Python dependencies
 ```
 
-## Implementation Details
+## 🧩 Implementation Details
 
-### Minimal Prompt Changes
+### Recent Improvements
 
-The system implements minimal prompt changes through several key components:
+1. **Rate Limiting & Retry Handling**: 
+   - Added global semaphore for NVIDIA API access across services
+   - Implemented exponential backoff retry logic
+   - Added proper error handling for 429 rate limit responses
 
-1. **Parameter Extraction**: Precisely identifies parameters from the initial prompt
-2. **Update Request Processing**: Analyzes user requests to determine exactly which parameters need to change
-3. **Minimal Prompt Regeneration**: Instructs the language model to:
-   - Focus only on changing components mentioned in the update request
-   - Maintain the same structure and flow of the original prompt
-   - Preserve the style and tone of the original prompt
-   - Avoid adding unnecessary details not present in the original prompt
+2. **Robust Status Updates**:
+   - Enhanced REST API endpoints with filesystem validation
+   - Added self-healing state recovery from directory structure
+   - Improved cross-referencing between job and batch IDs
 
-### Video Generation
+3. **Asynchronous Processing Architecture**:
+   - Implemented proper worker pools for background processing
+   - Added job queues for managing video generation tasks
+   - Fixed "no running event loop" issues in async initialization
 
-The video generation process utilizes NVIDIA's Cosmos Text2World model:
+4. **Persistent Session Management**:
+   - Implemented disk-based session persistence across restarts
+   - Added singleton pattern to prevent multiple instances losing sessions
+   - Implemented efficient loading/cleanup of sessions from disk
 
-1. User submits a prompt through the API
-2. The system generates a unique job ID and starts the video generation asynchronously
-3. Client connects to WebSocket endpoint to receive real-time status updates
-4. Server calls NVIDIA Cosmos API and monitors the generation process
-5. Generated video is extracted from the resulting ZIP file and made available
-6. Client receives the video URL via WebSocket when generation is complete
+5. **State Recovery System**:
+   - Added filesystem scanning to recover job status after restarts
+   - Implemented hierarchical directory structure for batch and job organization
+   - Enhanced error handling with filesystem evidence prioritization
+
+### Video Generation Flow
+
+1. Client submits a prompt through the API
+2. System generates a unique job ID and adds to job queue
+3. Background worker picks up the job when resources are available
+4. Worker acquires semaphore for NVIDIA API access (rate limiting)
+5. Request is sent to NVIDIA Cosmos API with retry logic for rate limits
+6. Client polls status endpoint for updates on generation progress
+7. Generated video is extracted and made available via static URL
+8. Client displays video when generation is complete
+
+### Design Concept from Original Blueprint
+
+This implementation draws inspiration from a comprehensive design for a prompt-tuning agent for NVIDIA's Cosmos text-to-video model. Key concepts adapted from the original design include:
+
+1. **Parameter Extraction**: Using LLMs to extract structured parameters from natural language prompts
+2. **Prompt Refinement**: Allowing users to modify prompts through conversational interaction
+3. **Modular Architecture**: Separating concerns into distinct services with clean interfaces
+4. **Asynchronous Processing**: Non-blocking operations for responsive user experience
+5. **Optimization Strategies**: Model selection and caching for performance enhancement
+6. **Self-Healing Systems**: Robust recovery mechanisms to maintain state after restarts
 
 ### Batch Video Generation
 
-For high-throughput scenarios, the system supports batch video generation:
+For high-throughput scenarios, the system supports parallel batch generation:
 
-1. Submit up to 8 prompts via the batch inference API endpoint
-2. Each prompt is assigned to a different GPU for parallel execution
-3. A batch ID is returned for tracking all jobs in the batch
-4. Real-time status updates are provided via WebSocket
-5. All generated videos are tracked in a single batch response
+1. Submit up to 8 prompts via batch endpoint
+2. Each prompt is assigned to a different GPU (0-7) for concurrent processing
+3. All jobs share the same global semaphore for NVIDIA API access
+4. Status updates are available via the batch_status endpoint
+5. All generated videos can be downloaded as a single ZIP file
+6. Directory structure preserves job organization even after service restarts
 
-For more details, see [BATCH_INFERENCE.md](BATCH_INFERENCE.md).
+## 🚀 Deploying on Brev.dev
+
+This project is optimized for deployment on a Brev.dev instance with 8 GPUs:
+
+1. Create a Brev instance with 8 GPUs
+2. Clone the repository and install dependencies
+3. Set up environment variables with API keys
+4. Start the server with uvicorn
+5. (Optional) Use ngrok for public access
+
+## 📊 Performance Considerations
+
+- **NVIDIA API Rate Limits**: The Cosmos API limits concurrent requests to 1 per API key
+- **GPU Memory Usage**: Each video generation job consumes significant GPU memory
+- **Worker Pool Sizing**: The worker pool is configured to handle multiple queued jobs
+- **Filesystem I/O**: Status endpoints scan directories for accurate state recovery
+- **Client Polling Strategy**: Clients should implement exponential backoff for polling
+
+## 🔮 Future Enhancements
+
+1. **Docker Containerization**: Containerize for easy deployment and scaling
+2. **Authentication System**: Add API keys and user management
+3. **Advanced Monitoring**: Prometheus metrics and Grafana dashboards
+4. **Custom Prompt Templates**: User-defined prompt templates and styles
+5. **Enhanced State Persistence**: Improved file-based persistence for high-reliability
+6. **Distributed Storage**: Add optional distributed storage for high-availability deployments
 
 ## License
 

@@ -1,0 +1,695 @@
+# World Model Portal User Flow Instructions
+
+## Overview
+
+This document provides implementation guidance for frontend developers integrating with the World Model Portal Backend. It outlines the desired user journey and provides code examples for integrating with the API endpoints in a cohesive flow. The backend uses RESTful endpoints for status tracking, with filesystem-based validation ensuring robustness across service restarts.
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Initial Prompt │     │ Prompt Variation│     │ Interactive     │     │  Video Results  │
+│     Entry       │────▶│    Generation   │────▶│ Prompt Tuning   │────▶│     Display     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+        │                       │                       │                        │
+        ▼                       ▼                       ▼                        ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│/api/enhance     │     │/api/generate-   │     │/api/update      │     │/api/video/status│
+│/api/initialize  │     │   variations    │     │                 │     │/api/video/batch_│
+│/api/video/single│     │/api/video/batch_│     │/api/video/single│     │   status        │
+│   _inference    │     │   inference     │     │   _inference    │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+## User Journey Flow
+
+1. **Initial Prompt Entry**
+   - User enters a rough prompt (e.g., "dog running")
+   - Clicks "Enhance" button
+   - The system automatically:
+     - Enhances the prompt with descriptive details
+     - Displays the enhanced prompt
+     - Initializes the parameter extraction system with this enhanced prompt
+     - Immediately starts a background video generation with the enhanced prompt
+
+2. **Prompt Augmentation Page**
+   - User is taken to a prompt variations page with a button click
+   - With another button click, original enhanced prompt is shown alongside 7 generated variations (8 total) 
+   - All prompts and their generation process are animated and displayed in a visual grid with "loading" animations
+   - Via a button click, a background batch video generation process starts for all 8 prompts
+   - GPU usage stats are shown for each prompt (which GPU is handling each prompt)
+
+3. **Interactive Prompt Tuning**
+   - While videos are generating, user is taken to the agentic prompt tuning interface
+   - User can modify the prompt using natural language requests (e.g., "make it more dramatic")
+   - The system updates parameters and regenerates the prompt
+   - Users can continue to refine the prompt through conversation
+   - By this point, hopefully the initial single video has completed
+   - If video is ready, it's displayed alongside the current prompt
+   - If not ready, continue showing "generating" status with status API polling
+
+4. **Apply Changes & Generate New Video**
+   - When satisfied with changes, user clicks "Apply Changes"
+   - System generates a new video using the updated prompt
+   - This repeats as the user continues to refine the prompt
+
+5. **Augmented Prompts Results**
+   - User can navigate to see all 8 generated videos
+   - Videos are displayed in a grid showing the prompt used for each
+   - Complete videos are shown; still-generating videos show progress indicators
+   - User can download all completed videos as a ZIP file
+
+## Frontend Implementation
+
+### Session Management
+
+The system uses session-based state management with in-memory storage. All prompt-related API calls should include the session_id in the request body.
+
+```javascript
+// Store and retrieve session ID
+function getSessionId() {
+    return localStorage.getItem('prompt_session_id');
+}
+
+function saveSessionId(sessionId) {
+    localStorage.setItem('prompt_session_id', sessionId);
+}
+```
+
+### 1. Prompt Enhancement & Initialization
+
+```javascript
+async function handleInitialPrompt(roughPrompt) {
+    try {
+        // Step 1: Enhance the prompt
+        const enhanceResponse = await fetch(`/api/enhance`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                rough_prompt: roughPrompt,
+                session_id: getSessionId() // May be null on first request
+            })
+        });
+        
+        if (!enhanceResponse.ok) {
+            throw new Error(`API error: ${enhanceResponse.status}`);
+        }
+        
+        const enhancedData = await enhanceResponse.json();
+        const enhancedPrompt = enhancedData.enhanced_prompt;
+        
+        // Save the session ID returned by the server
+        saveSessionId(enhancedData.session_id);
+        
+        // Step 2: Initialize parameter extraction with enhanced prompt
+        const initResponse = await fetch(`/api/initialize`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                prompt: enhancedPrompt,
+                session_id: enhancedData.session_id
+            })
+        });
+        
+        if (!initResponse.ok) {
+            throw new Error(`API error: ${initResponse.status}`);
+        }
+        
+        const paramsData = await initResponse.json();
+        
+        // Step 3: Start background video generation
+        const videoResponse = await fetch(`/api/video/single_inference`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ prompt: enhancedPrompt })
+        });
+        
+        if (!videoResponse.ok) {
+            throw new Error(`API error: ${videoResponse.status}`);
+        }
+        
+        const videoData = await videoResponse.json();
+        const jobId = videoData.job_id;
+        
+        // Step 4: Start polling for video status updates
+        startPollingVideoStatus(jobId);
+        
+        return {
+            enhancedPrompt,
+            parameters: paramsData.parameters,
+            videoJobId: jobId,
+            sessionId: paramsData.session_id
+        };
+    } catch (error) {
+        console.error('Error in initial prompt handling:', error);
+        // Show error message to user
+    }
+}
+
+// Poll video status endpoint for updates
+function startPollingVideoStatus(jobId) {
+    let pollCount = 0;
+    const maxPolls = 300; // Max 10 minutes of polling (with increasing intervals)
+    
+    const checkStatus = async () => {
+        try {
+            if (pollCount >= maxPolls) {
+                console.error('Reached maximum polling attempts');
+                updateVideoStatusUI({
+                    status: 'failed',
+                    message: 'Polling timeout - video generation may still be in progress',
+                    progress: 0,
+                    video_url: null
+                });
+                return;
+            }
+            
+            pollCount++;
+            
+            // Calculate polling interval with exponential backoff (1-10 seconds)
+            const baseInterval = 1000; // Start with 1 second
+            const maxInterval = 10000; // Cap at 10 seconds
+            const interval = Math.min(baseInterval * Math.pow(1.1, pollCount), maxInterval);
+            
+            const response = await fetch(`/api/video/status/${jobId}`);
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+            }
+            
+            const statusData = await response.json();
+            updateVideoStatusUI(statusData);
+            
+            if (statusData.status !== 'complete' && statusData.status !== 'failed') {
+                // Continue polling with calculated interval
+                setTimeout(checkStatus, interval);
+            } else {
+                console.log('Video status polling complete:', statusData.status);
+            }
+        } catch (error) {
+            console.error('Error polling status:', error);
+            // On error, use a longer delay before retry
+            setTimeout(checkStatus, 5000);
+        }
+    };
+    
+    // Start polling immediately
+    checkStatus();
+}
+
+function updateVideoStatusUI(statusData) {
+    // Update progress bar
+    const progressBar = document.getElementById('video-progress');
+    progressBar.value = statusData.progress;
+    
+    // Update status message
+    const statusElement = document.getElementById('video-status');
+    statusElement.textContent = `${statusData.status}: ${statusData.message}`;
+    
+    // Show video when complete
+    if (statusData.status === 'complete') {
+        const videoElement = document.getElementById('video-player');
+        
+        // Use video_url from response or construct fallback path
+        const videoUrl = statusData.video_url || `/static/videos/${statusData.job_id}/video.mp4`;
+        videoElement.src = videoUrl;
+        videoElement.style.display = 'block';
+        
+        // Add error handler with fallback logic
+        videoElement.onerror = () => {
+            console.error(`Error loading video from ${videoUrl}`);
+            // Try legacy format as fallback
+            const fallbackUrl = `/static/videos/${statusData.job_id}.mp4`;
+            console.log(`Trying fallback URL: ${fallbackUrl}`);
+            videoElement.src = fallbackUrl;
+        };
+    }
+}
+```
+
+### 2. Generate Prompt Variations & Batch Processing
+
+```javascript
+async function generateVariationsAndBatch(sessionId) {
+    try {
+        // Step 1: Generate variations based on the initial prompt
+        const variationsResponse = await fetch(`/api/generate-variations`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                selected_indices: [0], // Use the first prompt in history
+                total_count: 8,        // Generate 8 total variations
+                session_id: sessionId
+            })
+        });
+        
+        if (!variationsResponse.ok) {
+            throw new Error(`API error: ${variationsResponse.status}`);
+        }
+        
+        const variationsData = await variationsResponse.json();
+        const allPrompts = variationsData.prompts;
+        
+        // Process prompts, marking any fallbacks
+        const processedPrompts = allPrompts.map((prompt, index) => {
+            const isFallback = prompt.includes('(fallback') || 
+                               prompt.includes('(substitute') || 
+                               prompt.includes('(emergency');
+            
+            return {
+                prompt: prompt,
+                isFallback: isFallback,
+                index: index,
+                displayClass: isFallback ? 'fallback-variation' : 'normal-variation'
+            };
+        });
+        
+        // Step 2: Start batch processing of all prompts
+        const batchResponse = await fetch(`/api/video/batch_inference`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                prompts: allPrompts
+            })
+        });
+        
+        if (!batchResponse.ok) {
+            throw new Error(`API error: ${batchResponse.status}`);
+        }
+        
+        const batchData = await batchResponse.json();
+        const batchId = batchData.batch_id;
+        
+        // Step 3: Start polling for batch status updates
+        startBatchStatusPolling(batchId);
+        
+        return {
+            prompts: processedPrompts,
+            batchId: batchId
+        };
+    } catch (error) {
+        console.error('Error generating variations and batch:', error);
+        // Show error message to user
+    }
+}
+
+// Poll batch status endpoint with exponential backoff
+function startBatchStatusPolling(batchId) {
+    let pollCount = 0;
+    const maxPolls = 600; // Maximum polling attempts (up to 30 minutes with backoff)
+    
+    const checkBatchStatus = async () => {
+        try {
+            if (pollCount >= maxPolls) {
+                console.error('Reached maximum batch polling attempts');
+                return;
+            }
+            
+            pollCount++;
+            
+            // Calculate polling interval with exponential backoff (2-15 seconds)
+            const baseInterval = 2000; // Start with 2 seconds
+            const maxInterval = 15000; // Cap at 15 seconds
+            const interval = Math.min(baseInterval * Math.pow(1.05, pollCount), maxInterval);
+            
+            const response = await fetch(`/api/video/batch_status/${batchId}`);
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+            }
+            
+            const batchData = await response.json();
+            
+            // Update UI with batch status
+            updateBatchStatusUI(batchData);
+            
+            // Update each individual job's status
+            batchData.jobs?.forEach((job, index) => {
+                // Each job contains status, progress, video_url, gpu_id, etc.
+                updatePromptVariationUI(index, job);
+            });
+            
+            // Show download button when at least partially complete
+            if (batchData.status === 'complete' || batchData.status === 'partial') {
+                showBatchDownloadButton(batchId);
+            }
+            
+            // Continue polling if not complete
+            if (batchData.status !== 'complete' && batchData.status !== 'failed' && batchData.status !== 'partial') {
+                setTimeout(checkBatchStatus, interval);
+            } else {
+                console.log('Batch polling complete:', batchData.status);
+            }
+        } catch (error) {
+            console.error('Error polling batch status:', error);
+            // On error, use a longer delay before retry
+            setTimeout(checkBatchStatus, 10000);
+        }
+    };
+    
+    // Start polling immediately
+    checkBatchStatus();
+}
+
+function updatePromptVariationUI(index, job) {
+    const variationElement = document.getElementById(`variation-${index}`);
+    
+    // Update status display
+    const statusElement = variationElement.querySelector('.status');
+    statusElement.textContent = job.status;
+    
+    // Update GPU usage display
+    const gpuElement = variationElement.querySelector('.gpu-info');
+    gpuElement.textContent = `GPU ${job.gpu_id}`;
+    
+    // Update progress bar
+    const progressBar = variationElement.querySelector('.progress-bar');
+    progressBar.value = job.progress;
+    
+    // Show video when complete
+    if (job.status === 'complete' && job.video_url) {
+        const videoElement = variationElement.querySelector('video');
+        videoElement.src = job.video_url;
+        videoElement.style.display = 'block';
+        
+        // Hide progress elements
+        progressBar.style.display = 'none';
+    }
+}
+
+function showBatchDownloadButton(batchId) {
+    const downloadButton = document.getElementById('batch-download-button');
+    downloadButton.href = `/api/video/batch_download/${batchId}`;
+    downloadButton.style.display = 'block';
+}
+```
+
+### 3. Interactive Prompt Tuning
+
+```javascript
+async function updatePrompt(userRequest, sessionId) {
+    try {
+        // Send update request to the backend
+        const updateResponse = await fetch(`/api/update`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                user_request: userRequest,
+                session_id: sessionId
+            })
+        });
+        
+        if (!updateResponse.ok) {
+            throw new Error(`API error: ${updateResponse.status}`);
+        }
+        
+        const updateData = await updateResponse.json();
+        
+        // Update the UI with the new prompt and changes
+        displayUpdatedPrompt(updateData.prompt);
+        displayParameterChanges(updateData.changes);
+        
+        return {
+            updatedPrompt: updateData.prompt,
+            parameters: updateData.parameters,
+            changes: updateData.changes
+        };
+    } catch (error) {
+        console.error('Error updating prompt:', error);
+        // Show error message to user
+    }
+}
+
+async function applyChangesAndGenerateVideo(prompt) {
+    try {
+        // Start a new video generation with the updated prompt
+        const videoResponse = await fetch(`/api/video/single_inference`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ prompt: prompt })
+        });
+        
+        if (!videoResponse.ok) {
+            throw new Error(`API error: ${videoResponse.status}`);
+        }
+        
+        const videoData = await videoResponse.json();
+        const jobId = videoData.job_id;
+        
+        // Start polling for status updates
+        startPollingVideoStatus(jobId);
+        
+        return { videoJobId: jobId };
+    } catch (error) {
+        console.error('Error generating new video:', error);
+        // Show error message to user
+    }
+}
+
+async function getPromptHistory(sessionId) {
+    try {
+        // Get all prompt history from the backend
+        const historyResponse = await fetch(`/api/history`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ session_id: sessionId })
+        });
+        
+        if (!historyResponse.ok) {
+            throw new Error(`API error: ${historyResponse.status}`);
+        }
+        
+        const historyData = await historyResponse.json();
+        
+        // Display history in the UI
+        displayPromptHistory(historyData.history);
+        
+        return historyData.history;
+    } catch (error) {
+        console.error('Error fetching prompt history:', error);
+        // Show error message to user
+    }
+}
+```
+
+### 4. Complete User Flow Integration
+
+```javascript
+// Example of integrating the complete user flow
+document.addEventListener('DOMContentLoaded', () => {
+    // Step 1: Set up initial prompt form
+    const roughPromptForm = document.getElementById('rough-prompt-form');
+    roughPromptForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const roughPrompt = document.getElementById('rough-prompt-input').value;
+        
+        // Show loading state
+        document.getElementById('enhance-button').disabled = true;
+        document.getElementById('enhance-button').innerHTML = 'Enhancing... <span class="spinner"></span>';
+        
+        // Process the initial prompt
+        const result = await handleInitialPrompt(roughPrompt);
+        
+        // Update UI with enhanced prompt and parameters
+        document.getElementById('enhanced-prompt').textContent = result.enhancedPrompt;
+        document.getElementById('initial-parameters').textContent = JSON.stringify(result.parameters, null, 2);
+        
+        // Move to next step in the flow
+        showSection('variations-section');
+        
+        // Generate variations and start batch processing
+        const variationsResult = await generateVariationsAndBatch(result.sessionId);
+        
+        // Display variations in the UI
+        displayPromptVariations(variationsResult.prompts);
+        
+        // Enable prompt tuning interface
+        enablePromptTuning(result.sessionId);
+    });
+    
+    // Set up the prompt tuning form
+    const tuningForm = document.getElementById('prompt-tuning-form');
+    tuningForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const userRequest = document.getElementById('tuning-request-input').value;
+        const sessionId = getSessionId();
+        
+        // Show loading state
+        document.getElementById('update-button').disabled = true;
+        document.getElementById('update-button').innerHTML = 'Updating... <span class="spinner"></span>';
+        
+        // Update the prompt
+        const updateResult = await updatePrompt(userRequest, sessionId);
+        
+        // Reset form
+        document.getElementById('tuning-request-input').value = '';
+        document.getElementById('update-button').disabled = false;
+        document.getElementById('update-button').innerHTML = 'Update Prompt';
+        
+        // Update UI with new prompt
+        document.getElementById('current-prompt').textContent = updateResult.updatedPrompt;
+        
+        // Show changes that were made
+        const changesElement = document.getElementById('prompt-changes');
+        changesElement.innerHTML = '';
+        updateResult.changes.forEach(change => {
+            const changeItem = document.createElement('li');
+            changeItem.textContent = change;
+            changesElement.appendChild(changeItem);
+        });
+    });
+    
+    // Set up the "Apply Changes" button
+    const applyChangesButton = document.getElementById('apply-changes-button');
+    applyChangesButton.addEventListener('click', async () => {
+        const currentPrompt = document.getElementById('current-prompt').textContent;
+        
+        // Show loading state
+        applyChangesButton.disabled = true;
+        applyChangesButton.innerHTML = 'Generating... <span class="spinner"></span>';
+        
+        // Generate a new video with the updated prompt
+        await applyChangesAndGenerateVideo(currentPrompt);
+        
+        // Reset button
+        applyChangesButton.disabled = false;
+        applyChangesButton.innerHTML = 'Apply Changes & Generate New Video';
+    });
+    
+    // Set up the "View All Videos" button
+    document.getElementById('view-all-videos-button').addEventListener('click', () => {
+        showSection('batch-results-section');
+    });
+});
+
+// Helper function to show/hide sections of the UI
+function showSection(sectionId) {
+    // Hide all sections
+    document.querySelectorAll('.flow-section').forEach(section => {
+        section.style.display = 'none';
+    });
+    
+    // Show the requested section
+    document.getElementById(sectionId).style.display = 'block';
+}
+```
+
+### 5. Displaying Prompt Variations
+
+```javascript
+function displayPromptVariations(prompts) {
+    const container = document.getElementById('variations-container');
+    container.innerHTML = '';
+    
+    prompts.forEach((promptData, index) => {
+        const variationCard = document.createElement('div');
+        variationCard.id = `variation-${index}`;
+        variationCard.className = `variation-card ${promptData.displayClass}`;
+        
+        // Add prompt text
+        const promptElement = document.createElement('div');
+        promptElement.className = 'prompt-text';
+        promptElement.textContent = promptData.prompt;
+        
+        // Add status display
+        const statusElement = document.createElement('div');
+        statusElement.className = 'status';
+        statusElement.textContent = 'pending';
+        
+        // Add GPU info
+        const gpuElement = document.createElement('div');
+        gpuElement.className = 'gpu-info';
+        gpuElement.textContent = 'Awaiting GPU assignment';
+        
+        // Add progress bar
+        const progressBar = document.createElement('progress');
+        progressBar.className = 'progress-bar';
+        progressBar.max = 100;
+        progressBar.value = 0;
+        
+        // Add video element (hidden initially)
+        const videoElement = document.createElement('video');
+        videoElement.controls = true;
+        videoElement.style.display = 'none';
+        
+        // Add all elements to the card
+        variationCard.appendChild(promptElement);
+        variationCard.appendChild(statusElement);
+        variationCard.appendChild(gpuElement);
+        variationCard.appendChild(progressBar);
+        variationCard.appendChild(videoElement);
+        
+        // Add to container
+        container.appendChild(variationCard);
+        
+        // Add click handler for selecting this variation
+        variationCard.addEventListener('click', () => {
+            selectVariation(index);
+        });
+    });
+}
+
+function selectVariation(index) {
+    // Update UI to show which variation is selected
+    document.querySelectorAll('.variation-card').forEach(card => {
+        card.classList.remove('selected');
+    });
+    
+    document.getElementById(`variation-${index}`).classList.add('selected');
+    
+    // Load the selected prompt into the tuning interface
+    const promptText = document.getElementById(`variation-${index}`).querySelector('.prompt-text').textContent;
+    document.getElementById('current-prompt').textContent = promptText;
+}
+```
+
+This implementation provides a comprehensive approach to the user flow, ensuring a smooth experience through each step of the process from initial prompt to final video generation. The code examples include proper error handling, loading states, and WebSocket fallbacks for robustness.
+
+## Quick Reference
+
+| Step | Endpoints | Response Format | Files Generated |
+|------|-----------|----------------|-----------------|
+| 1. Initial Prompt | `/api/enhance`, `/api/initialize`, `/api/video/single_inference` | JSON with session_id, job_id | `/static/videos/{job_id}/video.mp4` |
+| 2. Variations | `/api/generate-variations`, `/api/video/batch_inference` | JSON with prompts[], batch_id | `/static/videos/{batch_id}/{job_id}/video.mp4` |
+| 3. Interactive Updates | `/api/update`, `/api/video/single_inference` | JSON with parameters, prompt | `/static/videos/{job_id}/video.mp4` |
+| 4. Status Checks | `/api/video/status/{job_id}`, `/api/video/batch_status/{batch_id}` | JSON with status, progress | N/A |
+| 5. Download | `/api/video/batch_download/{batch_id}` | ZIP file | N/A |
+
+## Best Practices
+
+1. **Session Management**
+   - Always include session IDs in requests after initialization
+   - Store session IDs in localStorage for persistence
+   - Example: `localStorage.setItem('prompt_session_id', sessionId);`
+
+2. **Error Handling**
+   - Check response.ok before consuming response data
+   - Implement proper retry logic with exponential backoff
+   - Show helpful error messages to users
+   - Example: `if (!response.ok) { throw new Error(`API error: ${response.status}`); }`
+
+3. **Loading States**
+   - Disable buttons during API operations
+   - Show spinners or loading indicators
+   - Provide progress updates during long operations
+   - Example: `button.innerHTML = 'Generating... <span class="spinner"></span>';`
+
+4. **Video Display**
+   - Always use the `video_url` from status responses when available
+   - Implement fallback paths if `video_url` is missing: `/static/videos/{job_id}/video.mp4`
+   - Add error handlers to try alternative formats if main path fails
+   - Provide download links alongside embedded videos
+
+5. **Efficient Polling**
+   - Implement exponential backoff to avoid overwhelming the server
+   - Start with 1-2 second intervals, gradually increase to 10-15 seconds
+   - Set appropriate timeouts for long-running operations
+   - Include fallback rendering logic if videos aren't yet available
+
+6. **Mobile Considerations**
+   - Test video playback carefully on mobile devices
+   - Ensure touch-friendly UI controls
+   - Consider bandwidth limitations when loading videos
+   - Use responsive grid layouts for video display
+
+7. **Handling Service Restarts**
+   - Design for resilience against backend service restarts
+   - Don't rely on in-memory state for long operations
+   - Use stable IDs that can be recovered when service restarts
+   - Save important state like session_id and job_ids locally

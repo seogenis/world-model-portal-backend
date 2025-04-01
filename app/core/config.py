@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Optional
+import asyncio
 
 
 class Settings(BaseSettings):
@@ -16,11 +17,10 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     NVIDIA_API_KEY: str = ""
     
-    # Redis Cache Configuration (optional)
-    REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6379
-    REDIS_DB: int = 0
-    CACHE_TTL: int = 3600  # Cache TTL in seconds
+    # Session configuration
+    CACHE_TTL: int = 3600  # Session TTL in seconds (1 hour)
+    
+    # No external database used - sessions stored on filesystem
     
     # Model Selection
     PARAMETER_EXTRACTION_MODEL: str = "gpt-4o-mini"
@@ -29,12 +29,45 @@ class Settings(BaseSettings):
     PROMPT_ENHANCEMENT_MODEL: str = "gpt-4o-mini"
     PROMPT_VARIATION_MODEL: str = "gpt-4o-mini"
     
+    # NVIDIA API Rate Limiting
+    NVIDIA_MAX_CONCURRENT: int = 1  # Maximum concurrent NVIDIA API calls
+    NVIDIA_RETRY_DELAY: int = 5  # Seconds to wait before retrying after rate limit
+    NVIDIA_RETRY_ATTEMPTS: int = 3  # Maximum number of retry attempts
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # Ignore extra fields from .env
+
+
+# Global semaphore to control NVIDIA API access
+nvidia_api_semaphore = asyncio.Semaphore(1)  # Default to 1 concurrent request
+
+def update_nvidia_semaphore(max_concurrent: int):
+    """Update the NVIDIA API semaphore limit"""
+    global nvidia_api_semaphore
+    # Create a new semaphore with the updated limit
+    nvidia_api_semaphore = asyncio.Semaphore(max_concurrent)
+
 
 
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached application settings."""
-    return Settings()
+    from app.core.logger import get_logger
+    logger = get_logger()
+    
+    settings = Settings()
+    
+    # Log API key status
+    if not settings.NVIDIA_API_KEY:
+        logger.warning("NVIDIA_API_KEY is not set in environment variables or .env file")
+        logger.info("Local GPU fallback is enabled - will use local GPUs when NVIDIA API fails")
+    
+    if not settings.OPENAI_API_KEY:
+        logger.warning("OPENAI_API_KEY is not set in environment variables or .env file")
+    
+    # Update semaphore based on settings
+    update_nvidia_semaphore(settings.NVIDIA_MAX_CONCURRENT)
+    
+    return settings

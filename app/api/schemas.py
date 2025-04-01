@@ -1,14 +1,24 @@
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, validator
 from enum import Enum
+from uuid import UUID
 
 
-class InitializeRequest(BaseModel):
+class SessionRequest(BaseModel):
+    """Request model with optional session ID."""
+    session_id: Optional[str] = Field(None, description="Optional session ID for persistent state")
+    
+class SessionIdRequest(BaseModel):
+    """Request model with required session ID."""
+    session_id: str = Field(..., description="Session ID for accessing stored state")
+
+
+class InitializeRequest(SessionRequest):
     """Request model for initializing a prompt."""
     prompt: str = Field(..., description="The initial text-to-video prompt")
 
 
-class UpdateRequest(BaseModel):
+class UpdateRequest(SessionRequest):
     """Request model for updating a prompt."""
     user_request: str = Field(..., description="The user's request to modify the prompt")
 
@@ -18,9 +28,10 @@ class PromptResponse(BaseModel):
     parameters: Dict[str, Any] = Field(..., description="Extracted parameters from the prompt")
     prompt: str = Field(..., description="The current prompt text")
     changes: List[str] = Field(default=[], description="List of changes made in this update")
+    session_id: str = Field(..., description="Session ID for this prompt state")
 
 
-class EnhancePromptRequest(BaseModel):
+class EnhancePromptRequest(SessionRequest):
     """Request model for enhancing a rough prompt."""
     rough_prompt: str = Field(..., description="The rough prompt to enhance with details")
 
@@ -29,9 +40,10 @@ class EnhancePromptResponse(BaseModel):
     """Response model for enhanced prompts."""
     original_prompt: str = Field(..., description="The original rough prompt")
     enhanced_prompt: str = Field(..., description="The enhanced prompt with descriptive details")
+    session_id: str = Field(..., description="Session ID for this prompt state")
 
 
-class GenerateVariationsRequest(BaseModel):
+class GenerateVariationsRequest(SessionRequest):
     """Request model for generating prompt variations."""
     selected_indices: List[int] = Field(..., description="Indices of selected prompts from prompt history")
     total_count: int = Field(8, description="Total number of prompts to generate (including selected ones)")
@@ -53,6 +65,7 @@ class GenerateVariationsResponse(BaseModel):
     """Response model for prompt variations."""
     prompts: List[str] = Field(..., description="List of prompt variations")
     selected_indices: List[int] = Field(..., description="The indices that were selected")
+    session_id: str = Field(..., description="Session ID for this prompt state")
 
 
 class PromptHistoryItem(BaseModel):
@@ -65,6 +78,7 @@ class PromptHistoryItem(BaseModel):
 class PromptHistoryResponse(BaseModel):
     """Response model for prompt history."""
     history: List[PromptHistoryItem] = Field(..., description="List of all prompts")
+    session_id: str = Field(..., description="Session ID for this prompt state")
 
 
 class VideoStatus(str, Enum):

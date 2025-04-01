@@ -1,117 +1,119 @@
-from fastapi import FastAPI, Request
+import logging
+import asyncio
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
-from app.api.routes import router as api_router
-from app.core.config import get_settings
 import os
-from pathlib import Path
+import atexit
+from datetime import datetime
 
-settings = get_settings()
+from app.api.routes import router as api_router
+from app.core.config import get_settings, update_nvidia_semaphore
+from app.core.logger import get_logger
 
-# Initialize FastAPI app
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    description="""
-    Prompt tuning agent for NVIDIA Cosmos text-to-video model.
-    
-    ## API Highlights
-    
-    - **Single Video Generation**: Generate videos from text prompts on a single GPU
-    - **Batch Video Generation**: Process multiple prompts in parallel (up to 8 GPUs)
-    - **Prompt Management**: Fine-tune and enhance prompts for better results
-    - **Real-time Updates**: Get live progress via WebSockets
-    
-    ## Quick Links
-    
-    - [API Documentation](/api_docs) - Detailed API documentation
-    - [Demo Interface](/demo) - Interactive demo to test the API
-    """,
-    version=settings.VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url=f"{settings.API_PREFIX}/openapi.json"
-)
+# Create app
+app = FastAPI(title=get_settings().PROJECT_NAME, version=get_settings().VERSION)
 
-# Add CORS middleware
+# Setup logging
+logger = get_logger()
+
+# Configure routes
+api_router_with_prefix = APIRouter(prefix=get_settings().API_PREFIX)
+api_router_with_prefix.include_router(api_router)
+app.include_router(api_router_with_prefix)
+
+# Configure static files
+os.makedirs("static", exist_ok=True)
+os.makedirs("static/videos", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to your frontend domain
+    allow_origins=["*"],  # Allow all origins in dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include API router
-app.include_router(api_router, prefix=settings.API_PREFIX)
+# Background task for session cleanup
+session_cleanup_task = None
+cleanup_interval = 3600  # 1 hour
 
-# Create static directory for videos if it doesn't exist
-os.makedirs("static/videos", exist_ok=True)
-os.makedirs("static/frontend_examples", exist_ok=True)
+# Create service instances at app start to reuse throughout
+parameter_extractor_instance = None
+session_manager_instance = None
 
-# Copy frontend examples and API documentation to static directory for easy access
-project_root = Path(__file__).parent.parent.parent
+def get_global_session_manager():
+    """Get a singleton instance of the SessionManagerService."""
+    global parameter_extractor_instance, session_manager_instance
+    
+    if session_manager_instance is None:
+        from app.services.parameter_extractor import ParameterExtractor
+        from app.services.session_manager import SessionManagerService
+        
+        parameter_extractor_instance = ParameterExtractor()
+        session_manager_instance = SessionManagerService(parameter_extractor_instance)
+        
+    return session_manager_instance
 
-# List of frontend examples to copy
-frontend_examples = [
-    "video_generator_complete.html",  # Main comprehensive example
-    "demo_complete.html",             # Complete demo with all sections
-    "polling_example.html",           # Minimal polling example
-    "batch_video_generator.html"      # Legacy example
-]
+async def run_session_cleanup():
+    """
+    Background task to periodically clean up expired sessions.
+    """
+    logger.info("Starting session cleanup background task")
+    
+    while True:
+        try:
+            # Get the global SessionManagerService instance
+            session_manager = get_global_session_manager()
+            
+            # Cleanup expired sessions
+            removed = await session_manager.cleanup_expired_sessions()
+            logger.info(f"Session cleanup removed {removed} expired sessions")
+            
+            # Sleep for the configured interval
+            await asyncio.sleep(cleanup_interval)
+            
+        except asyncio.CancelledError:
+            # Task is being cancelled, clean up and exit
+            logger.info("Session cleanup task cancelled")
+            break
+        except Exception as e:
+            # Log the error and continue
+            logger.error(f"Error in session cleanup task: {str(e)}")
+            await asyncio.sleep(60)  # Sleep for a minute before retrying
 
-# Copy each example
-for example in frontend_examples:
-    source_html = project_root / "frontend_examples" / example
-    dest_html = project_root / "static" / "frontend_examples" / example
-    if source_html.exists():
-        with open(source_html, "r") as src, open(dest_html, "w") as dst:
-            dst.write(src.read())
+@app.on_event("startup")
+async def startup_event():
+    # Configure NVIDIA API semaphore
+    logger.info(f"Configured NVIDIA API concurrency to {get_settings().NVIDIA_MAX_CONCURRENT}")
+    update_nvidia_semaphore(get_settings().NVIDIA_MAX_CONCURRENT)
+    
+    # Start the session cleanup task
+    global session_cleanup_task
+    session_cleanup_task = asyncio.create_task(run_session_cleanup())
+    logger.info("Session cleanup background task started")
 
-source_docs = project_root / "API_DOCUMENTATION.md"
-dest_docs = project_root / "static" / "API_DOCUMENTATION.md"
-if source_docs.exists():
-    with open(source_docs, "r") as src, open(dest_docs, "w") as dst:
-        dst.write(src.read())
-
-# Mount static files directory
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Cancel the session cleanup task
+    if session_cleanup_task:
+        session_cleanup_task.cancel()
+        try:
+            await session_cleanup_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Session cleanup background task stopped")
 
 @app.get("/")
 async def root():
-    """Root endpoint providing basic info."""
+    return {"message": "Welcome to the Cosmos Prompt Tuner API", "version": get_settings().VERSION}
+
+@app.get("/health")
+async def health():
     return {
-        "name": settings.PROJECT_NAME,
-        "version": settings.VERSION,
-        "description": "Prompt tuning agent for NVIDIA Cosmos text-to-video model",
-        "docs": "/docs",
-        "example_app": "/demo",
-        "api_docs": "/api_docs",
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "version": get_settings().VERSION
     }
-
-
-@app.get("/demo", response_class=HTMLResponse)
-async def video_demo():
-    """Serve the video generation demo page."""
-    return HTMLResponse(
-        content="""<!DOCTYPE html>
-<html>
-<head>
-    <meta http-equiv="refresh" content="0; url=/static/frontend_examples/demo_complete.html" />
-</head>
-<body>
-    <p>Redirecting to demo...</p>
-</body>
-</html>"""
-    )
-
-
-@app.get("/api_docs")
-async def api_documentation():
-    """Serve the API documentation markdown file."""
-    return FileResponse(
-        path="static/API_DOCUMENTATION.md",
-        media_type="text/markdown",
-        filename="API_DOCUMENTATION.md"
-    )

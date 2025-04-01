@@ -1,0 +1,517 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 0, 0, 0;
+  --background-end-rgb: 0, 0, 0;
+
+  /* Chart colors */
+  --chart-1: 180 100% 50%;
+  --chart-2: 280 100% 50%;
+  --chart-3: 220 100% 50%;
+  --chart-4: 320 100% 50%;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(to bottom, transparent, rgb(var(--background-end-rgb))) rgb(var(--background-start-rgb));
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 128, 128, 0.5);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 128, 128, 0.7);
+}
+
+/* Holographic effect */
+.holographic {
+  position: relative;
+  overflow: hidden;
+}
+
+.holographic::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(0, 255, 255, 0.3) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: skewX(-25deg);
+  animation: holographic 3s infinite;
+}
+
+@keyframes holographic {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 200%;
+  }
+}
+
+/* Neon text effect */
+.neon-text {
+  text-shadow: 0 0 5px rgba(0, 255, 255, 0.7), 0 0 10px rgba(0, 255, 255, 0.5), 0 0 15px rgba(0, 255, 255, 0.3), 0 0
+    20px rgba(0, 255, 255, 0.2);
+}
+
+/* Grid background */
+.grid-bg {
+  background-image: radial-gradient(rgba(0, 128, 128, 0.1) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Blinking cursor animation */
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
+
+
+
+import type { Config } from "tailwindcss"
+
+const config = {
+  darkMode: ["class"],
+  content: [
+    "./pages/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./app/**/*.{ts,tsx}",
+    "./src/**/*.{ts,tsx}",
+    "*.{js,ts,jsx,tsx,mdx}",
+  ],
+  prefix: "",
+  theme: {
+    container: {
+      center: true,
+      padding: "2rem",
+      screens: {
+        "2xl": "1400px",
+      },
+    },
+    extend: {
+      colors: {
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT: "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
+        },
+        secondary: {
+          DEFAULT: "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
+        },
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
+        card: {
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+        // Custom colors
+        cyan: {
+          "300": "#67e8f9",
+          "400": "#22d3ee",
+          "500": "#06b6d4",
+        },
+        purple: {
+          "400": "#c084fc",
+          "500": "#a855f7",
+          "600": "#9333ea",
+        },
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+      },
+      keyframes: {
+        "accordion-down": {
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
+        },
+        "accordion-up": {
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
+        },
+      },
+      animation: {
+        "accordion-down": "accordion-down 0.2s ease-out",
+        "accordion-up": "accordion-up 0.2s ease-out",
+      },
+    },
+  },
+  plugins: [require("tailwindcss-animate")],
+} satisfies Config
+
+export default config
+
+
+"use client"
+
+import type React from "react"
+
+import { useState, useRef, useEffect } from "react"
+import { motion } from "framer-motion"
+
+interface LandingPageProps {
+  onSubmit: (command: string) => void
+}
+
+export default function LandingPage({ onSubmit }: LandingPageProps) {
+  const [command, setCommand] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    // Focus the input field when component mounts
+    if (inputRef.current) {
+      inputRef.current.focus()
+    }
+
+    // Create the particle effect
+    const canvas = document.getElementById("particle-canvas") as HTMLCanvasElement
+    if (canvas) {
+      const ctx = canvas.getContext("2d")
+      if (ctx) {
+        canvas.width = window.innerWidth
+        canvas.height = window.innerHeight
+
+        const particles: Particle[] = []
+        const particleCount = 100
+
+        class Particle {
+          x: number
+          y: number
+          size: number
+          speedX: number
+          speedY: number
+          color: string
+
+          constructor() {
+            this.x = Math.random() * canvas.width
+            this.y = Math.random() * canvas.height
+            this.size = Math.random() * 3 + 1
+            this.speedX = Math.random() * 2 - 1
+            this.speedY = Math.random() * 2 - 1
+            this.color = `hsl(${Math.random() * 60 + 180}, 100%, 50%)`
+          }
+
+          update() {
+            this.x += this.speedX
+            this.y += this.speedY
+
+            if (this.x > canvas.width) this.x = 0
+            if (this.x < 0) this.x = canvas.width
+            if (this.y > canvas.height) this.y = 0
+            if (this.y < 0) this.y = canvas.height
+          }
+
+          draw() {
+            if (ctx) {
+              ctx.fillStyle = this.color
+              ctx.beginPath()
+              ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2)
+              ctx.fill()
+            }
+          }
+        }
+
+        for (let i = 0; i < particleCount; i++) {
+          particles.push(new Particle())
+        }
+
+        function animate() {
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            for (let i = 0; i < particles.length; i++) {
+              particles[i].update()
+              particles[i].draw()
+            }
+            requestAnimationFrame(animate)
+          }
+        }
+
+        animate()
+
+        const handleResize = () => {
+          canvas.width = window.innerWidth
+          canvas.height = window.innerHeight
+        }
+
+        window.addEventListener("resize", handleResize)
+        return () => window.removeEventListener("resize", handleResize)
+      }
+    }
+  }, [])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (command.trim()) {
+      onSubmit(command)
+    }
+  }
+
+  return (
+    <div className="relative flex flex-col items-center justify-center min-h-screen w-full overflow-hidden">
+      <canvas id="particle-canvas" className="absolute inset-0 z-0" />
+
+      <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/50 z-10" />
+
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 1 }}
+        className="z-20 text-center mb-16"
+      >
+        <h1 className="text-6xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-600 mb-2">
+          World Model Portal
+        </h1>
+        <div className="text-xl text-cyan-300 opacity-80">Access the cosmos simulation environment</div>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.3, duration: 0.8 }}
+        className="z-20 w-full max-w-2xl px-4"
+      >
+        <form onSubmit={handleSubmit} className="flex flex-col items-center">
+          <div className="relative group w-full mb-4">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-cyan-400 to-purple-600 rounded-lg blur opacity-60 group-hover:opacity-100 transition duration-1000 group-hover:duration-200 animate-pulse"></div>
+            <input
+              ref={inputRef}
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="Enter your command..."
+              className="relative w-full px-6 py-4 bg-black/80 border border-cyan-500/30 rounded-lg text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 backdrop-blur-sm"
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="bg-gradient-to-r from-cyan-500 to-purple-600 text-white px-6 py-3 rounded-md hover:from-cyan-600 hover:to-purple-700 transition-all duration-300 w-48"
+          >
+            Initialize
+          </button>
+        </form>
+      </motion.div>
+
+      <div className="absolute bottom-10 left-0 right-0 flex justify-center z-20">
+        <div className="text-cyan-400/70 text-sm animate-pulse">
+          Cosmos Simulation v1.0 • Powered by NVIDIA Nemotron-Super-49B-v1
+        </div>
+      </div>
+    </div>
+  )
+}
+
+"use client"
+
+import { useState, useEffect } from "react"
+import { motion } from "framer-motion"
+import PromptPanel from "./panels/prompt-panel"
+import VideoPanel from "./panels/video-panel"
+import ParametersPanel from "./panels/parameters-panel"
+import ChatbotPanel from "./panels/chatbot-panel"
+import LoadingBackground from "./loading-background"
+import { SimulationProvider } from "@/context/simulation-context"
+import { Loader2 } from "lucide-react"
+
+interface CommandCenterProps {
+  initialCommand: string
+}
+
+export default function CommandCenter({ initialCommand }: CommandCenterProps) {
+  const [isLoading, setIsLoading] = useState(true)
+  const [progress, setProgress] = useState(0)
+
+  useEffect(() => {
+    // Simulate loading progress
+    const interval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 100) {
+          clearInterval(interval)
+          setTimeout(() => setIsLoading(false), 500) // Small delay after reaching 100%
+          return 100
+        }
+        return prev + 2 // Increment by 2% each time
+      })
+    }, 40) // Update every 40ms for smooth animation
+
+    return () => clearInterval(interval)
+  }, [])
+
+  // Loading steps for display
+  const loadingSteps = [
+    { threshold: 20, text: "Initializing simulation parameters..." },
+    { threshold: 40, text: "Loading environment assets..." },
+    { threshold: 60, text: "Calibrating physics engine..." },
+    { threshold: 80, text: "Connecting to Nemotron AI..." },
+    { threshold: 95, text: "Finalizing command center..." },
+    { threshold: 100, text: "Ready" },
+  ]
+
+  // Get current loading step text
+  const getCurrentStepText = () => {
+    const currentStep = loadingSteps.findLast((step) => progress >= step.threshold)
+    return currentStep?.text || loadingSteps[0].text
+  }
+
+  return (
+    <SimulationProvider initialCommand={initialCommand}>
+      <div className="relative min-h-screen w-full bg-black overflow-hidden">
+        {/* Background grid effect for main interface */}
+        {!isLoading && (
+          <div className="absolute inset-0 bg-[radial-gradient(rgba(0,128,128,0.1)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none"></div>
+        )}
+
+        {isLoading ? (
+          <div className="flex items-center justify-center min-h-screen">
+            {/* Animated background */}
+            <LoadingBackground />
+
+            {/* Overlay gradient */}
+            <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/80 pointer-events-none"></div>
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.5 }}
+              className="text-center max-w-md w-full px-6 z-10"
+            >
+              {/* Holographic logo */}
+              <motion.div
+                className="mb-8 relative"
+                animate={{
+                  rotateY: [0, 10, 0, -10, 0],
+                  filter: [
+                    "drop-shadow(0 0 8px rgba(0, 255, 255, 0.3))",
+                    "drop-shadow(0 0 12px rgba(0, 255, 255, 0.5))",
+                    "drop-shadow(0 0 8px rgba(0, 255, 255, 0.3))",
+                  ],
+                }}
+                transition={{
+                  duration: 5,
+                  repeat: Number.POSITIVE_INFINITY,
+                  ease: "easeInOut",
+                }}
+              >
+                <div className="text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-600 mb-2">
+                  COSMOS
+                </div>
+                <div className="text-sm text-cyan-300 uppercase tracking-widest">Simulation Engine</div>
+              </motion.div>
+
+              <div className="text-2xl font-bold text-cyan-400 mb-6">Initializing Command Center</div>
+
+              {/* Progress container with symmetric design */}
+              <div className="relative mb-4">
+                {/* Track with glow effect */}
+                <div className="h-1 w-full bg-gray-800 rounded-full overflow-hidden shadow-[0_0_5px_rgba(0,255,255,0.2)]">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-cyan-400 via-purple-500 to-cyan-400"
+                    initial={{ width: "0%" }}
+                    animate={{ width: `${progress}%` }}
+                    transition={{ ease: "easeInOut" }}
+                  />
+                </div>
+
+                {/* Percentage indicator */}
+                <div className="mt-2 flex justify-between items-center">
+                  <div className="text-xs text-cyan-300/70">{getCurrentStepText()}</div>
+                  <div className="text-xs font-mono text-cyan-400">{`${Math.round(progress)}%`}</div>
+                </div>
+              </div>
+
+              {/* Loading animation */}
+              <motion.div
+                animate={{
+                  rotate: 360,
+                  opacity: [0.5, 1, 0.5],
+                }}
+                transition={{
+                  rotate: { duration: 2, repeat: Number.POSITIVE_INFINITY, ease: "linear" },
+                  opacity: { duration: 1.5, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" },
+                }}
+                className="mx-auto mt-6 relative"
+              >
+                <div className="w-12 h-12 rounded-full border-2 border-cyan-500/30 border-t-cyan-500 border-r-purple-500"></div>
+                <Loader2 className="w-12 h-12 absolute top-0 left-0 text-cyan-400/50" />
+              </motion.div>
+
+              {/* System info */}
+              <div className="mt-8 flex justify-center space-x-4 text-xs text-gray-500">
+                <span>NVIDIA Cosmos 1.0</span>
+                <span>•</span>
+                <span>Nemotron-Super-49B-v1</span>
+                <span>•</span>
+                <span>v1.0.3</span>
+              </div>
+            </motion.div>
+          </div>
+        ) : (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5 }}
+            className="grid grid-cols-2 grid-rows-2 gap-4 h-screen p-4"
+          >
+            <PromptPanel />
+            <VideoPanel />
+            <ParametersPanel />
+            <ChatbotPanel />
+          </motion.div>
+        )}
+      </div>
+    </SimulationProvider>
+  )
+}
+

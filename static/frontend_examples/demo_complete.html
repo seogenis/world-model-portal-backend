@@ -259,6 +259,7 @@
         <div class="tab" id="parameter-tab">Parameter Extraction</div>
         <div class="tab" id="update-tab">Prompt Updates</div>
         <div class="tab" id="variation-tab">Prompt Variations</div>
+        <div class="tab" id="session-tab">Session Management</div>
     </div>
     
     <!-- Single Video Generation Tab -->
@@ -408,15 +409,59 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
         </div>
     </div>
     
+    <!-- Session Management Tab -->
+    <div class="tab-content" id="session-content">
+        <h2>Session Management</h2>
+        <p>Manage your prompt sessions and history.</p>
+        
+        <div style="margin-bottom: 20px;">
+            <h3>Current Session</h3>
+            <div id="current-session-info" style="border: 1px solid #ddd; padding: 15px; border-radius: 4px; background-color: #f9f9f9;">
+                <p>Session ID: <span id="current-session-id">None</span></p>
+            </div>
+            
+            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                <button id="new-session-btn">Create New Session</button>
+                <button id="clear-session-btn">Clear Session Data</button>
+            </div>
+        </div>
+        
+        <div style="margin-top: 30px;">
+            <h3>Active Sessions</h3>
+            <button id="list-sessions-btn">List All Sessions</button>
+            
+            <div id="sessions-list" style="margin-top: 15px; border: 1px solid #ddd; padding: 15px; border-radius: 4px; max-height: 300px; overflow-y: auto; display: none;">
+                <!-- Sessions will be listed here -->
+            </div>
+        </div>
+    </div>
+    
     <script>
         // Set up API URL based on environment
+        // Note: The API base path should match settings.API_PREFIX in the backend config
         const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
             ? `http://${window.location.host}/api` 
             : `https://${window.location.host}/api`;
+            
+        // Helper function to detect and report API errors
+        async function handleApiResponse(response, errorMessage = "API Error") {
+            if (!response.ok) {
+                // Try to get error details from response
+                let errorDetails = "";
+                try {
+                    const errorData = await response.json();
+                    errorDetails = errorData.detail || `Status: ${response.status}`;
+                } catch (e) {
+                    errorDetails = `Status: ${response.status}`;
+                }
+                throw new Error(`${errorMessage}: ${errorDetails}`);
+            }
+            return await response.json();
+        }
         
         // Tab switching functionality
-        const tabs = ['single-tab', 'batch-tab', 'prompt-tab', 'parameter-tab', 'update-tab', 'variation-tab'];
-        const contents = ['single-content', 'batch-content', 'prompt-content', 'parameter-content', 'update-content', 'variation-content'];
+        const tabs = ['single-tab', 'batch-tab', 'prompt-tab', 'parameter-tab', 'update-tab', 'variation-tab', 'session-tab'];
+        const contents = ['single-content', 'batch-content', 'prompt-content', 'parameter-content', 'update-content', 'variation-content', 'session-content'];
         
         tabs.forEach((tabId, index) => {
             const tab = document.getElementById(tabId);
@@ -428,6 +473,23 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 // Add active class to clicked tab and corresponding content
                 tab.classList.add('active');
                 document.getElementById(contents[index]).classList.add('active');
+                
+                // Special handling for specific tabs
+                if (tabId === 'variation-tab') {
+                    // Auto-load history when switching to variations tab
+                    const currentSessionId = getSessionId();
+                    if (currentSessionId && (!promptHistory || promptHistory.length === 0)) {
+                        console.log('Loading history for variations tab');
+                        loadSessionHistory(currentSessionId).then(() => {
+                            updateHistoryList();
+                        }).catch(e => {
+                            console.error('Error loading history:', e);
+                        });
+                    } else {
+                        // Refresh the history display
+                        updateHistoryList();
+                    }
+                }
             });
         });
         
@@ -494,8 +556,8 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 addSingleLogEntry('info', `Job created with ID: ${currentSingleJobId}`);
                 singleGenerateBtn.textContent = 'Generating... (Switch tabs safely)';
                 
-                // Start polling for status updates (in background)
-                startSinglePolling(currentSingleJobId);
+                // Start polling for status updates
+                fallbackToPolling(currentSingleJobId);
                 
             } catch (error) {
                 addSingleLogEntry('error', `Error: ${error.message}`);
@@ -505,24 +567,128 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
             }
         }
         
-        // Start polling for single video status updates
+        // Legacy function kept for compatibility but now just calls fallbackToPolling
         function startSinglePolling(jobId) {
-            if (singlePollingActive) return;
-            
-            singlePollingActive = true;
-            addSingleLogEntry('info', `Starting to poll for status updates...`);
-            
-            // Start the polling process in the background
-            pollSingleStatus(jobId);
+            fallbackToPolling(jobId);
         }
         
-        // Poll for single video status updates
+        // Connect to WebSocket for status updates
+        function connectToWebSocket(jobId) {
+            // Determine WebSocket URL (ws or wss based on current protocol)
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsBaseUrl = `${wsProtocol}//${window.location.host}`;
+            const wsUrl = `${wsBaseUrl}/api/ws/video/${jobId}`;
+            
+            addSingleLogEntry('info', `Connecting to WebSocket at ${wsUrl}`);
+            
+            // Create WebSocket connection
+            let socket;
+            try {
+                socket = new WebSocket(wsUrl);
+            } catch (e) {
+                addSingleLogEntry('error', `Failed to create WebSocket: ${e.message}`);
+                fallbackToPolling(jobId);
+                return;
+            }
+            
+            // Set timeout for WebSocket connection
+            const connectionTimeout = setTimeout(() => {
+                if (socket.readyState !== WebSocket.OPEN) {
+                    addSingleLogEntry('error', 'WebSocket connection timed out');
+                    socket.close();
+                    fallbackToPolling(jobId);
+                }
+            }, 10000); // 10 second timeout
+            
+            // Connection opened
+            socket.addEventListener('open', (event) => {
+                addSingleLogEntry('info', 'WebSocket connection established');
+                clearTimeout(connectionTimeout); // Clear timeout once connected
+            });
+            
+            // Listen for messages
+            socket.addEventListener('message', (event) => {
+                try {
+                    const statusData = JSON.parse(event.data);
+                    console.log('WebSocket update:', statusData);
+                    
+                    // Update UI with status
+                    updateSingleStatus(statusData);
+                    
+                    // Check if we should close WebSocket
+                    if (statusData.status === 'complete' || statusData.status === 'failed') {
+                        addSingleLogEntry('info', `Job ${jobId} ${statusData.status}, closing WebSocket`);
+                        singlePollingActive = false;
+                        singleGenerateBtn.textContent = 'Generate Video';
+                        socket.close();
+                    }
+                } catch (error) {
+                    console.error('Error parsing WebSocket message:', error);
+                    addSingleLogEntry('error', `Error parsing WebSocket message: ${error.message}`);
+                }
+            });
+            
+            // Connection closed
+            socket.addEventListener('close', (event) => {
+                clearTimeout(connectionTimeout); // Clear timeout if it hasn't fired
+                
+                const reason = event.reason ? `: ${event.reason}` : '';
+                addSingleLogEntry('info', `WebSocket connection closed${reason}`);
+                
+                // If closed unexpectedly and we're still expecting updates, fall back to polling
+                if (singlePollingActive) {
+                    addSingleLogEntry('info', 'WebSocket closed unexpectedly, falling back to polling');
+                    fallbackToPolling(jobId);
+                } else {
+                    singlePollingActive = false;
+                }
+            });
+            
+            // Connection error
+            socket.addEventListener('error', (error) => {
+                addSingleLogEntry('error', `WebSocket error: ${error.message || 'Unknown error'}`);
+                console.error('WebSocket error:', error);
+                
+                // Fall back to polling on WebSocket error
+                if (singlePollingActive) {
+                    fallbackToPolling(jobId);
+                }
+                singlePollingActive = false;
+            });
+            
+            return socket;
+        }
+        
+        // Fallback to traditional polling if WebSocket fails
+        function fallbackToPolling(jobId) {
+            addSingleLogEntry('info', `Falling back to polling for status updates...`);
+            
+            // Prevent double fallbacks
+            if (!singlePollingActive) {
+                singlePollingActive = true;
+                
+                // Use the traditional polling approach
+                pollSingleStatus(jobId);
+            }
+        }
+        
+        // Poll for single video status as fallback (traditional method)
         function pollSingleStatus(jobId) {
+            // Don't start polling if it's already active
+            if (!singlePollingActive) {
+                singlePollingActive = true;
+                addSingleLogEntry('info', `Starting status polling for job ${jobId}...`);
+            }
+            
+            // Always ensure we have the current job ID stored
+            currentSingleJobId = jobId;
+            
             // Use setTimeout instead of blocking with while loop
             // This allows other UI interactions to happen while polling
             const pollOnce = async () => {
                 try {
                     // Fetch status from API
+                    addSingleLogEntry('info', `Polling for status update...`);
                     const response = await fetch(`${API_BASE_URL}/video/status/${jobId}`);
                     
                     if (!response.ok) {
@@ -547,6 +713,18 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                     if (statusData.status === 'complete' || statusData.status === 'failed') {
                         singlePollingActive = false;
                         singleGenerateBtn.textContent = 'Generate Video';
+                        
+                        // If complete but no video showing, try once more with our fallback logic
+                        if (statusData.status === 'complete' && singleVideo.style.display !== 'block') {
+                            addSingleLogEntry('info', `Job complete but video not showing, triggering manual video load`);
+                            updateSingleStatus({
+                                status: 'complete',
+                                message: 'Video generation complete',
+                                progress: 100,
+                                video_url: statusData.video_url
+                            });
+                        }
+                        
                         return; // Stop polling
                     } 
                     
@@ -557,10 +735,16 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 } catch (error) {
                     console.error('Error polling status:', error);
                     addSingleLogEntry('error', `Polling error: ${error.message}`);
-                    singlePollingActive = false;
-                    singleStatusText.textContent = 'Error';
-                    singleStatusText.className = 'status status-failed';
-                    singleGenerateBtn.textContent = 'Generate Video';
+                    
+                    // Don't immediately fail - give it a few more tries
+                    if (singlePollingActive) {
+                        addSingleLogEntry('info', `Will retry polling in ${SINGLE_POLL_INTERVAL/1000} seconds...`);
+                        setTimeout(pollOnce, SINGLE_POLL_INTERVAL);
+                    } else {
+                        singleStatusText.textContent = 'Error';
+                        singleStatusText.className = 'status status-failed';
+                        singleGenerateBtn.textContent = 'Generate Video';
+                    }
                 }
             };
             
@@ -587,13 +771,69 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
             singleProgressBar.value = progress;
             
             // If video is complete, show it
-            if (status === 'complete' && videoUrl) {
-                singleVideo.src = videoUrl;
-                singleVideo.style.display = 'block';
-                singleVideo.onloadeddata = () => {
-                    singleVideo.play();
-                };
-                addSingleLogEntry('complete', `Video available at: ${videoUrl}`);
+            if (status === 'complete') {
+                // Handle case where videoUrl might be missing
+                let finalVideoUrl = videoUrl;
+                if (!finalVideoUrl && currentSingleJobId) {
+                    // Use direct static path as instructed
+                    finalVideoUrl = `/static/videos/${currentSingleJobId}/video.mp4`;
+                    addSingleLogEntry('info', `Using direct static path: ${finalVideoUrl}`);
+                }
+                
+                if (finalVideoUrl) {
+                    // Try to load the video
+                    singleVideo.src = finalVideoUrl;
+                    singleVideo.style.display = 'block';
+                    singleVideo.onloadeddata = () => {
+                        addSingleLogEntry('complete', `Video loaded successfully and ready for playback`);
+                        singleVideo.play();
+                    };
+                    
+                    // Simple error handler - since we're already using the direct path
+                    singleVideo.onerror = () => {
+                        addSingleLogEntry('error', `Error loading video from ${finalVideoUrl}.`);
+                        
+                        // Try legacy format as fallback
+                        if (currentSingleJobId) {
+                            const fallbackUrl = `/static/videos/${currentSingleJobId}.mp4`;
+                            addSingleLogEntry('info', `Trying fallback URL: ${fallbackUrl}`);
+                            singleVideo.src = fallbackUrl;
+                            
+                            // Final error handler
+                            singleVideo.onerror = () => {
+                                addSingleLogEntry('error', `Video loading failed. The video may still be processing or could not be generated correctly.`);
+                                
+                                // Display the video path for debugging
+                                addSingleLogEntry('info', `Expected video path: /static/videos/${currentSingleJobId}/video.mp4`);
+                            };
+                        }
+                    };
+                    
+                    // Log the video URL attempt
+                    addSingleLogEntry('info', `Attempting to load video from: ${finalVideoUrl}`);
+                    
+                    // Set a reload timer if video doesn't load
+                    setTimeout(() => {
+                        if (singleVideo.readyState === 0) { // Video hasn't started loading
+                            addSingleLogEntry('info', 'Video not loading after timeout, trying reload...');
+                            singleVideo.load(); // Force reload
+                            
+                            // Add a second timer for a final check if video is still not loading
+                            setTimeout(() => {
+                                if (singleVideo.readyState === 0) { 
+                                    // We're already using the direct path, just force a reload
+                                    addSingleLogEntry('info', 'Video still not loading after second timeout, forcing another reload...');
+                                    singleVideo.load();
+                                    
+                                    // Display path for debugging
+                                    addSingleLogEntry('info', `Expected video path: /static/videos/${currentSingleJobId}/video.mp4`);
+                                }
+                            }, 3000);
+                        }
+                    }, 2000);
+                } else {
+                    addSingleLogEntry('error', 'Video URL not provided in response');
+                }
             }
         }
         
@@ -708,7 +948,7 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 batchGenerateBtn.textContent = 'Generating... (Switch tabs safely)';
                 
                 // Start polling for status updates
-                startBatchPolling(currentBatchId);
+                fallbackToBatchPolling(currentBatchId);
                 
             } catch (error) {
                 console.error('Error starting batch processing:', error);
@@ -718,18 +958,120 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
             }
         }
         
-        // Start polling for batch status updates
+        // Legacy function kept for compatibility but now just calls fallbackToBatchPolling 
         function startBatchPolling(batchId) {
-            if (batchPollingActive) return;
-            
-            batchPollingActive = true;
-            console.log(`Starting polling for batch ${batchId}`);
-            
-            // Start the polling process
-            pollBatchStatus(batchId);
+            fallbackToBatchPolling(batchId);
         }
         
-        // Poll for batch status updates
+        // Connect to WebSocket for batch status updates
+        function connectToBatchWebSocket(batchId) {
+            // Determine WebSocket URL (ws or wss based on current protocol)
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsBaseUrl = `${wsProtocol}//${window.location.host}`;
+            const wsUrl = `${wsBaseUrl}/api/ws/batch/${batchId}`;
+            
+            console.log(`Connecting to batch WebSocket at ${wsUrl}`);
+            
+            // Create WebSocket connection
+            let socket;
+            try {
+                socket = new WebSocket(wsUrl);
+            } catch (e) {
+                console.error(`Failed to create batch WebSocket: ${e.message}`);
+                fallbackToBatchPolling(batchId);
+                return;
+            }
+            
+            // Set timeout for WebSocket connection
+            const connectionTimeout = setTimeout(() => {
+                if (socket.readyState !== WebSocket.OPEN) {
+                    console.error('Batch WebSocket connection timed out');
+                    socket.close();
+                    fallbackToBatchPolling(batchId);
+                }
+            }, 10000); // 10 second timeout
+            
+            // Connection opened
+            socket.addEventListener('open', (event) => {
+                console.log('Batch WebSocket connection established');
+                clearTimeout(connectionTimeout); // Clear timeout once connected
+            });
+            
+            // Listen for messages
+            socket.addEventListener('message', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Batch WebSocket update:', data);
+                    
+                    // Update UI with batch status
+                    updateBatchUI(data);
+                    
+                    // Check if batch is complete, failed, or partial
+                    if (data.status === 'complete' || data.status === 'failed' || data.status === 'partial') {
+                        batchPollingActive = false;
+                        batchGenerateBtn.textContent = 'Generate Videos';
+                        
+                        // Show download button if there are completed videos
+                        if (data.completed > 0) {
+                            batchDownloadContainer.style.display = 'block';
+                            batchDownloadBtn.textContent = `Download All Videos (${data.completed})`;
+                            batchDownloadBtn.onclick = () => {
+                                window.location.href = `${API_BASE_URL}/video/batch_download/${batchId}`;
+                            };
+                        }
+                        
+                        // Close WebSocket
+                        socket.close();
+                    }
+                } catch (error) {
+                    console.error('Error parsing batch WebSocket message:', error);
+                }
+            });
+            
+            // Connection closed
+            socket.addEventListener('close', (event) => {
+                clearTimeout(connectionTimeout); // Clear timeout if it hasn't fired
+                
+                const reason = event.reason ? `: ${event.reason}` : '';
+                console.log(`Batch WebSocket connection closed${reason}`);
+                
+                // If closed unexpectedly and still waiting for completion, fall back to polling
+                if (batchPollingActive) {
+                    console.log('Batch WebSocket closed unexpectedly, falling back to polling');
+                    fallbackToBatchPolling(batchId);
+                } else {
+                    batchPollingActive = false;
+                }
+            });
+            
+            // Connection error
+            socket.addEventListener('error', (error) => {
+                console.error('Batch WebSocket error:', error);
+                
+                // Fall back to polling on WebSocket error
+                if (batchPollingActive) {
+                    fallbackToBatchPolling(batchId);
+                }
+                batchPollingActive = false;
+            });
+            
+            return socket;
+        }
+        
+        // Fallback to traditional polling for batch if WebSocket fails
+        function fallbackToBatchPolling(batchId) {
+            console.log(`Falling back to polling for batch ${batchId} status updates...`);
+            
+            // Prevent double fallbacks
+            if (!batchPollingActive) {
+                batchPollingActive = true;
+                
+                // Use the traditional polling approach
+                pollBatchStatus(batchId);
+            }
+        }
+        
+        // Poll for batch status updates (traditional fallback method)
         function pollBatchStatus(batchId) {
             // Use setTimeout pattern for non-blocking polling
             const pollOnce = async () => {
@@ -806,9 +1148,63 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                     progressEl.value = job.progress;
                     
                     // Show video if complete
-                    if (job.status === 'complete' && job.video_url) {
-                        videoEl.src = job.video_url;
-                        videoEl.style.display = 'block';
+                    if (job.status === 'complete') {
+                        // Handle case where video_url might be missing
+                        let finalVideoUrl = job.video_url;
+                        if (!finalVideoUrl && job.job_id) {
+                            // Use direct static path as instructed
+                            finalVideoUrl = `/static/videos/${job.job_id}/video.mp4`;
+                            console.log(`Using direct static path for job ${index}: ${finalVideoUrl}`);
+                        }
+                        
+                        if (finalVideoUrl) {
+                            // Try to load the video
+                            videoEl.src = finalVideoUrl;
+                            videoEl.style.display = 'block';
+                            
+                            // Handle video loading success
+                            videoEl.onloadeddata = () => {
+                                console.log(`Video for job ${index} loaded successfully`);
+                            };
+                            
+                            // Simple error handler - since we're already using the direct path
+                            videoEl.onerror = () => {
+                                console.error(`Error loading video for job ${index} from ${finalVideoUrl}.`);
+                                
+                                // Try legacy format as fallback
+                                if (job.job_id) {
+                                    const fallbackUrl = `/static/videos/${job.job_id}.mp4`;
+                                    console.log(`Trying fallback URL for job ${index}: ${fallbackUrl}`);
+                                    videoEl.src = fallbackUrl;
+                                    
+                                    // Final error handler
+                                    videoEl.onerror = () => {
+                                        console.error(`Video loading failed for job ${index}`);
+                                        console.log(`Expected video path: /static/videos/${job.job_id}/video.mp4`);
+                                    };
+                                }
+                            };
+                            
+                            // Add download link underneath video with same URL as video source
+                            const parent = videoEl.parentElement;
+                            if (!document.getElementById(`download-${index}`)) {
+                                const downloadLink = document.createElement('a');
+                                downloadLink.id = `download-${index}`;
+                                downloadLink.href = finalVideoUrl;
+                                downloadLink.download = `video-${job.job_id}.mp4`;
+                                downloadLink.textContent = 'Download Video';
+                                downloadLink.className = 'button';
+                                downloadLink.style.display = 'block';
+                                downloadLink.style.marginTop = '10px';
+                                downloadLink.style.textAlign = 'center';
+                                parent.appendChild(downloadLink);
+                                
+                                // Update download link if video source changes
+                                videoEl.addEventListener('loadeddata', () => {
+                                    downloadLink.href = videoEl.src;
+                                });
+                            }
+                        }
                     }
                 });
             }
@@ -843,13 +1239,17 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
             enhanceBtn.innerHTML = 'Enhancing...<span class="loading"></span>';
             
             try {
+                // Get current session ID (may be null for first request)
+                const currentSessionId = getSessionId();
+                
                 const response = await fetch(`${API_BASE_URL}/enhance`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        rough_prompt: prompt
+                        rough_prompt: prompt,
+                        session_id: currentSessionId
                     })
                 });
                 
@@ -858,6 +1258,11 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 }
                 
                 const data = await response.json();
+                
+                // Save session ID if it's new
+                if (data.session_id) {
+                    saveSessionId(data.session_id);
+                }
                 
                 // Display the enhanced prompt
                 enhancedPrompt.textContent = data.enhanced_prompt;
@@ -880,9 +1285,28 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
         const parametersResult = document.getElementById('parameters-result');
         const parametersContainer = document.getElementById('parameters-container');
         
-        // Current state for prompt management
+        // Current state for prompt management with session support
         let currentParameters = null;
         let promptHistory = [];
+        let sessionId = null;
+        
+        // Try to get session ID from local storage
+        function getSessionId() {
+            if (!sessionId) {
+                sessionId = localStorage.getItem('prompt_session_id');
+                console.log(`Retrieved session ID from storage: ${sessionId}`);
+            }
+            return sessionId;
+        }
+        
+        // Save session ID to local storage
+        function saveSessionId(id) {
+            if (id) {
+                sessionId = id;
+                localStorage.setItem('prompt_session_id', id);
+                console.log(`Saved session ID to storage: ${id}`);
+            }
+        }
         
         // Add event listeners
         extractBtn.addEventListener('click', extractParameters);
@@ -899,13 +1323,17 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
             extractBtn.innerHTML = 'Extracting...<span class="loading"></span>';
             
             try {
+                // Get current session ID or create new session
+                const currentSessionId = getSessionId();
+                
                 const response = await fetch(`${API_BASE_URL}/initialize`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        prompt: prompt
+                        prompt: prompt,
+                        session_id: currentSessionId // May be null for first request
                     })
                 });
                 
@@ -914,6 +1342,9 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 }
                 
                 const data = await response.json();
+                
+                // Save or update session ID
+                saveSessionId(data.session_id);
                 
                 // Store the current parameters
                 currentParameters = data.parameters;
@@ -927,6 +1358,9 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 
                 // Update the current prompt in the update tab
                 document.getElementById('current-prompt').innerHTML = `<p>${data.prompt}</p>`;
+                
+                // Show session ID in the UI
+                document.getElementById('current-prompt').innerHTML += `<p><small>Session ID: ${data.session_id}</small></p>`;
                 
                 // Update history in variations tab
                 updateHistoryList();
@@ -1004,6 +1438,14 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 return;
             }
             
+            // Get the current session ID
+            const currentSessionId = getSessionId();
+            if (!currentSessionId) {
+                alert('No session ID found. Please initialize a prompt first.');
+                document.getElementById('parameter-tab').click();
+                return;
+            }
+            
             updateBtn.disabled = true;
             updateBtn.innerHTML = 'Updating...<span class="loading"></span>';
             
@@ -1014,7 +1456,8 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        user_request: request
+                        user_request: request,
+                        session_id: currentSessionId
                     })
                 });
                 
@@ -1023,6 +1466,13 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 }
                 
                 const data = await response.json();
+                
+                // Verify session ID matches
+                if (data.session_id !== currentSessionId) {
+                    console.warn(`Session ID mismatch: ${data.session_id} vs ${currentSessionId}`);
+                    // Update our session ID if it changed
+                    saveSessionId(data.session_id);
+                }
                 
                 // Update current parameters
                 currentParameters = data.parameters;
@@ -1106,41 +1556,113 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 return;
             }
             
+            // Use a stable array for selection tracking rather than checkbox IDs
+            if (!window.selectedHistoryIndices) {
+                window.selectedHistoryIndices = [];
+            }
+            
             for (let i = 0; i < promptHistory.length; i++) {
                 const historyItem = document.createElement('div');
                 historyItem.className = 'parameter-item';
                 historyItem.style.marginBottom = '10px';
+                
+                // Create checkbox with unique ID
+                const checkboxId = `history-check-${Date.now()}-${i}`;
+                
+                // Determine if this item is selected
+                const isSelected = window.selectedHistoryIndices.includes(i);
+                
                 historyItem.innerHTML = `
                     <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
                         <span style="font-weight: bold;">${i + 1}. ${promptHistory[i].description}</span>
-                        <input type="checkbox" id="history-check-${i}" data-index="${i}">
+                        <input type="checkbox" id="${checkboxId}" data-index="${i}" ${isSelected ? 'checked' : ''}>
                     </div>
-                    <div style="font-size: 13px;">${promptHistory[i].prompt}</div>
+                    <div style="font-size: 13px; max-height: 80px; overflow-y: auto;">${promptHistory[i].prompt}</div>
                 `;
                 historyList.appendChild(historyItem);
+                
+                // Add event listener for checkbox
+                setTimeout(() => {
+                    const checkbox = document.getElementById(checkboxId);
+                    if (checkbox) {
+                        checkbox.addEventListener('change', function() {
+                            const index = parseInt(this.dataset.index);
+                            if (this.checked) {
+                                // Add to selected indices if not already present
+                                if (!window.selectedHistoryIndices.includes(index)) {
+                                    window.selectedHistoryIndices.push(index);
+                                }
+                            } else {
+                                // Remove from selected indices
+                                window.selectedHistoryIndices = window.selectedHistoryIndices.filter(idx => idx !== index);
+                            }
+                            console.log('Selected history indices:', window.selectedHistoryIndices);
+                        });
+                    }
+                }, 0);
             }
         }
         
         // Generate variations
         async function generateVariations() {
+            // If history isn't loaded, try to load it first
+            if (!promptHistory || promptHistory.length === 0) {
+                const currentSessionId = getSessionId();
+                if (currentSessionId) {
+                    try {
+                        await loadSessionHistory(currentSessionId);
+                        updateHistoryList();
+                    } catch (e) {
+                        console.error('Failed to load prompt history:', e);
+                        alert('Please initialize a prompt first using the Parameter Extraction tab');
+                        document.getElementById('parameter-tab').click();
+                        return;
+                    }
+                } else {
+                    alert('Please initialize a prompt first using the Parameter Extraction tab');
+                    document.getElementById('parameter-tab').click();
+                    return;
+                }
+            }
+            
+            // If still no history after attempted load, redirect to parameter tab
             if (!promptHistory || promptHistory.length === 0) {
                 alert('Please initialize a prompt first using the Parameter Extraction tab');
                 document.getElementById('parameter-tab').click();
                 return;
             }
             
-            // Get selected indices
-            const selectedIndices = [];
-            for (let i = 0; i < promptHistory.length; i++) {
-                const checkbox = document.getElementById(`history-check-${i}`);
-                if (checkbox && checkbox.checked) {
-                    selectedIndices.push(i);
-                }
+            // Get current session ID
+            const currentSessionId = getSessionId();
+            if (!currentSessionId) {
+                alert('No session ID found. Please initialize a prompt first.');
+                document.getElementById('parameter-tab').click();
+                return;
             }
+            
+            // Use our stable array for selection tracking
+            const selectedIndices = window.selectedHistoryIndices || [];
             
             if (selectedIndices.length === 0) {
                 alert('Please select at least one prompt from the history');
                 return;
+            }
+            
+            // Validate that indices are still valid
+            const validIndices = selectedIndices.filter(idx => idx >= 0 && idx < promptHistory.length);
+            if (validIndices.length === 0) {
+                alert('Selected prompt indices are no longer valid. Please select at least one prompt from the current history.');
+                // Reset the selection
+                window.selectedHistoryIndices = [];
+                updateHistoryList();
+                return;
+            }
+            
+            // Use only valid indices
+            if (validIndices.length !== selectedIndices.length) {
+                console.warn(`Removed ${selectedIndices.length - validIndices.length} invalid indices`);
+                window.selectedHistoryIndices = validIndices;
+                updateHistoryList();
             }
             
             const count = parseInt(variationsCount.value);
@@ -1149,14 +1671,17 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
             generateVariationsBtn.innerHTML = 'Generating...<span class="loading"></span>';
             
             try {
+                console.log(`Generating ${count} variations based on ${selectedIndices.length} selected prompts`);
+                
                 const response = await fetch(`${API_BASE_URL}/generate-variations`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        selected_indices: selectedIndices,
-                        total_count: count
+                        selected_indices: validIndices, // Use validated indices
+                        total_count: count,
+                        session_id: currentSessionId
                     })
                 });
                 
@@ -1166,12 +1691,23 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 
                 const data = await response.json();
                 
+                // Verify we received the expected number of variations
+                if (data.prompts.length !== count) {
+                    console.warn(`Expected ${count} variations but received ${data.prompts.length}`);
+                }
+                
                 // Store variations
                 currentVariations = data.prompts;
                 selectedVariationIndex = -1;
                 
-                // Display variations
-                displayVariations(data.prompts);
+                // Get information about which are original vs. new variations
+                const originalIndices = validIndices.length;
+                const newVariations = data.prompts.length - originalIndices;
+                
+                console.log(`Received ${originalIndices} original prompts and ${newVariations} new variations`);
+                
+                // Display variations with information about which are original vs. new
+                displayVariations(data.prompts, validIndices.length);
                 
                 variationsResult.style.display = 'block';
                 
@@ -1185,7 +1721,7 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
         }
         
         // Display variations in the UI
-        function displayVariations(variations) {
+        function displayVariations(variations, originalCount = 0) {
             variationsContainer.innerHTML = '';
             
             if (!variations || variations.length === 0) {
@@ -1193,11 +1729,57 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 return;
             }
             
+            // Count how many are original selected prompts vs newly generated variations
+            const count = parseInt(variationsCount.value);
+            const newCount = variations.length - originalCount;
+            const displayText = `Showing ${variations.length} results: ${originalCount} original + ${newCount} new variations`;
+            
+            // Add header with count information
+            const headerDiv = document.createElement('div');
+            headerDiv.style.width = '100%';
+            headerDiv.style.marginBottom = '15px';
+            headerDiv.style.fontWeight = 'bold';
+            headerDiv.textContent = displayText;
+            variationsContainer.appendChild(headerDiv);
+            
+            // Create grid for variations
             for (let i = 0; i < variations.length; i++) {
                 const variationItem = document.createElement('div');
                 variationItem.className = 'variation-item';
                 variationItem.dataset.index = i;
-                variationItem.textContent = variations[i];
+                
+                // Add a number label to help identify each variation
+                const numberLabel = document.createElement('div');
+                numberLabel.style.fontWeight = 'bold';
+                numberLabel.style.marginBottom = '5px';
+                
+                // Special styling for original vs. generated variations
+                if (i < originalCount) {
+                    // Original prompt
+                    numberLabel.textContent = `Original ${i + 1}`;
+                    numberLabel.style.color = '#4CAF50';
+                    variationItem.style.backgroundColor = '#E8F5E9';
+                    variationItem.style.borderColor = '#4CAF50';
+                } else {
+                    // New variation
+                    numberLabel.textContent = `New Variation ${i + 1 - originalCount}`;
+                    numberLabel.style.color = '#2196F3';
+                }
+                
+                // Container for the prompt text
+                const promptText = document.createElement('div');
+                promptText.textContent = variations[i];
+                
+                // Handle fallback variations
+                if (variations[i].includes('(fallback') || variations[i].includes('(substitute')) {
+                    variationItem.style.backgroundColor = '#fff3e0';
+                    variationItem.style.borderColor = '#ff9800';
+                    numberLabel.textContent += ' (fallback)';
+                    numberLabel.style.color = '#ff9800';
+                }
+                
+                variationItem.appendChild(numberLabel);
+                variationItem.appendChild(promptText);
                 
                 variationItem.addEventListener('click', () => {
                     // Remove selected class from all items
@@ -1213,6 +1795,307 @@ A vintage red convertible driving down a coastal highway at sunset.</textarea>
                 variationsContainer.appendChild(variationItem);
             }
         }
+        
+        // -------------------- Session Management --------------------
+        
+        // Get DOM elements for session management
+        const currentSessionId = document.getElementById('current-session-id');
+        const newSessionBtn = document.getElementById('new-session-btn');
+        const clearSessionBtn = document.getElementById('clear-session-btn');
+        const listSessionsBtn = document.getElementById('list-sessions-btn');
+        const sessionsList = document.getElementById('sessions-list');
+        
+        // Add event listeners
+        newSessionBtn.addEventListener('click', createNewSession);
+        clearSessionBtn.addEventListener('click', clearSessionData);
+        listSessionsBtn.addEventListener('click', listAllSessions);
+        
+        // Update session info display
+        function updateSessionDisplay() {
+            const sid = getSessionId();
+            currentSessionId.textContent = sid || 'None';
+        }
+        
+        // Call this when the session tab is clicked
+        document.getElementById('session-tab').addEventListener('click', updateSessionDisplay);
+        
+        // Also update session display when the document is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            // Update session display when the page loads
+            updateSessionDisplay();
+            
+            // If we have a saved session ID, try to load its data
+            const savedSessionId = getSessionId();
+            if (savedSessionId) {
+                console.log(`Found saved session ID: ${savedSessionId}`);
+                try {
+                    // Load session history but don't await it - let it run in background
+                    loadSessionHistory(savedSessionId);
+                } catch (e) {
+                    console.warn("Could not load saved session history:", e);
+                }
+            }
+        });
+        
+        // Create a new session
+        async function createNewSession() {
+            try {
+                // Clear existing session ID
+                localStorage.removeItem('prompt_session_id');
+                sessionId = null;
+                
+                // Make a request to initialize with null session ID to get a new one
+                const response = await fetch(`${API_BASE_URL}/initialize`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        prompt: "A new session with a placeholder prompt",
+                        session_id: null // Explicitly request a new session
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Save the new session ID
+                saveSessionId(data.session_id);
+                
+                // Update display
+                updateSessionDisplay();
+                alert(`New session created with ID: ${data.session_id}`);
+                
+            } catch (error) {
+                console.error('Error creating new session:', error);
+                alert(`Error creating new session: ${error.message}`);
+            }
+        }
+        
+        // Clear session data
+        function clearSessionData() {
+            if (confirm('Are you sure you want to clear the current session data? This will remove the session ID from your browser but the session will still exist on the server.')) {
+                localStorage.removeItem('prompt_session_id');
+                sessionId = null;
+                
+                // Reset local state
+                currentParameters = null;
+                promptHistory = [];
+                
+                // Update display
+                updateSessionDisplay();
+                alert('Session data cleared from browser.');
+            }
+        }
+        
+        // List all active sessions
+        async function listAllSessions() {
+            try {
+                // Show loading state
+                sessionsList.innerHTML = '<p>Loading sessions...</p>';
+                sessionsList.style.display = 'block';
+                
+                const response = await fetch(`${API_BASE_URL}/sessions`);
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Display sessions
+                if (!data.sessions || Object.keys(data.sessions).length === 0) {
+                    sessionsList.innerHTML = '<p>No active sessions found.</p>';
+                    return;
+                }
+                
+                // Create a table to display sessions
+                let tableHtml = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Session ID</th>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Last Accessed</th>
+                                <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                for (const [sid, lastAccessed] of Object.entries(data.sessions)) {
+                    const date = new Date(lastAccessed * 1000).toLocaleString();
+                    
+                    tableHtml += `
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${sid}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${date}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                                <button onclick="useSession('${sid}')" style="padding: 5px 10px; margin-right: 5px;">Use</button>
+                                <button onclick="deleteSession('${sid}')" style="padding: 5px 10px; background-color: #f44336;">Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                }
+                
+                tableHtml += `
+                        </tbody>
+                    </table>
+                `;
+                
+                sessionsList.innerHTML = tableHtml;
+                
+            } catch (error) {
+                console.error('Error listing sessions:', error);
+                sessionsList.innerHTML = `<p>Error loading sessions: ${error.message}</p>`;
+            }
+        }
+        
+        // Use a specific session
+        async function useSession(sid) {
+            try {
+                // Save the session ID
+                saveSessionId(sid);
+                
+                // Update display
+                updateSessionDisplay();
+                
+                // Load prompt history for this session
+                await loadSessionHistory(sid);
+                
+                alert(`Now using session: ${sid}`);
+            } catch (error) {
+                console.error('Error using session:', error);
+                alert(`Error using session: ${error.message}`);
+            }
+        }
+        
+        // Delete a session
+        async function deleteSession(sid) {
+            if (confirm(`Are you sure you want to delete session ${sid}? This cannot be undone.`)) {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/session/${sid}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`API error: ${response.status}`);
+                    }
+                    
+                    // If we deleted the current session, clear local storage
+                    if (sid === getSessionId()) {
+                        localStorage.removeItem('prompt_session_id');
+                        sessionId = null;
+                        updateSessionDisplay();
+                    }
+                    
+                    // Refresh the sessions list
+                    await listAllSessions();
+                    
+                    alert(`Session ${sid} deleted successfully`);
+                    
+                } catch (error) {
+                    console.error('Error deleting session:', error);
+                    alert(`Error deleting session: ${error.message}`);
+                }
+            }
+        }
+        
+        // Load prompt history for a session
+        async function loadSessionHistory(sid) {
+            try {
+                // Use POST method as required by updated API
+                const response = await fetch(`${API_BASE_URL}/history`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: sid
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update prompt history
+                promptHistory = data.history || [];
+                
+                // Update the current prompt if there's any history
+                if (promptHistory.length > 0) {
+                    const latestPrompt = promptHistory[promptHistory.length - 1];
+                    currentParameters = latestPrompt.parameters;
+                    
+                    // Update the current prompt in the update tab
+                    document.getElementById('current-prompt').innerHTML = `
+                        <p>${latestPrompt.prompt}</p>
+                        <p><small>Session ID: ${sid}</small></p>
+                    `;
+                    
+                    // Also try to load current parameters separately to ensure we have latest
+                    try {
+                        await loadCurrentParameters(sid);
+                    } catch (paramError) {
+                        console.warn("Could not load current parameters:", paramError);
+                        // Continue with the parameters from history
+                    }
+                }
+                
+                // Update history in variations tab
+                updateHistoryList();
+                
+                return promptHistory;
+                
+            } catch (error) {
+                console.error('Error loading session history:', error);
+                return [];
+            }
+        }
+        
+        // Load current parameters for a session
+        async function loadCurrentParameters(sid) {
+            try {
+                // Use POST method as required by updated API
+                const response = await fetch(`${API_BASE_URL}/parameters`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: sid
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update current parameters
+                if (data.parameters) {
+                    currentParameters = data.parameters;
+                }
+                
+                return currentParameters;
+                
+            } catch (error) {
+                console.error('Error loading current parameters:', error);
+                throw error;
+            }
+        }
+        
+        // Expose functions to global scope for the onclick handlers
+        window.useSession = useSession;
+        window.deleteSession = deleteSession;
+        
+        // Initialize the session display
+        updateSessionDisplay();
         
         // -------------------- Helper Functions --------------------
         
