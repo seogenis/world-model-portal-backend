@@ -367,6 +367,24 @@ Download all successfully generated videos from a batch as a ZIP file.
 
 **Response:** A ZIP file containing all generated videos.
 
+### 4. Clean Expired Jobs
+
+**Endpoint:** `POST /api/video/clean_expired?max_age={seconds}`
+
+Manually clean up single inference jobs that have been in the queue too long.
+
+**Query Parameters:**
+- `max_age`: Maximum age in seconds for jobs (default: 300 seconds/5 minutes)
+
+**Response:**
+```json
+{
+  "queue_size_before": 10,
+  "queue_size_after": 3,
+  "expired_jobs_removed": 7
+}
+```
+
 ## Static File Paths
 
 The system stores generated videos in a consistent file structure that can be accessed directly:
@@ -479,6 +497,7 @@ All prompt-related endpoints support session-based state management:
 - `processing`: Local processing of video files (extracting from zip)
 - `complete`: Video generation complete
 - `failed`: Video generation failed
+- `expired`: Job removed from queue after waiting too long (default: 5 minutes)
 
 ### Batch Status
 

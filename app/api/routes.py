@@ -409,7 +409,7 @@ async def get_video_status(
         
         if actual_file_path.exists():
             # Video file exists at the expected location, job is complete
-            logger.info(f"Found completed video file for job {job_id} at {static_path}")
+            logger.info(f"Status request for job {job_id}: status=complete")
             return VideoStatusResponse(
                 job_id=job_id,
                 status="complete",
@@ -447,6 +447,8 @@ async def get_video_status(
             
             # Estimate progress based on elapsed time (typical video takes 60-120 seconds)
             estimated_progress = min(95, int(elapsed_time / 120 * 100))
+            
+            logger.info(f"Status request for job {job_id}: status=generating (progress: {estimated_progress}%)")
             
             return VideoStatusResponse(
                 job_id=job_id,
@@ -546,6 +548,8 @@ async def get_video_status(
             # Update expected path in messages
             if status_data["status"] == "complete":
                 status_data["message"] = f"Video generation complete. Video available at: /static/videos/{job_id}/video.mp4"
+            
+            logger.info(f"Status request for job {job_id}: status={status_data['status']} (progress: {status_data['progress']}%)")
                 
             return VideoStatusResponse(
                 job_id=job_id,
@@ -556,6 +560,8 @@ async def get_video_status(
             )
         
         # If we still don't find anything, return a pending status
+        logger.info(f"Status request for job {job_id}: status=pending (job not found in system)")
+        
         return VideoStatusResponse(
             job_id=job_id,
             status="pending",
@@ -618,7 +624,7 @@ async def get_batch_status(
     # Check if batch directory exists on disk
     batch_dir = Path("static/videos") / batch_id
     if batch_dir.exists() and batch_dir.is_dir():
-        logger.info(f"Found batch directory on disk: {batch_dir}")
+        logger.info(f"Batch status request for batch {batch_id}: initial_status={batch_status.get('status')}")
         
         # If status is "not_found" but directory exists, create a new status object
         if batch_status.get("status") == "not_found":
@@ -706,6 +712,8 @@ async def get_batch_status(
                 else:
                     batch_status["status"] = "processing"
                     batch_status["message"] = "Batch processing in progress"
+                
+                logger.info(f"Batch status request for batch {batch_id}: status={batch_status['status']} (completed: {completed}/{total}, failed: {failed}/{total})")
             else:
                 # Batch directory exists but no job folders found
                 logger.warning(f"Batch directory {batch_dir} exists but no job folders found")
@@ -806,6 +814,9 @@ async def get_batch_status(
                 "jobs": jobs
             }
             
+    # Log final status before returning
+    logger.info(f"Batch status request for batch {batch_id}: final_status={batch_status.get('status')} (completed: {batch_status.get('completed', 0)}/{batch_status.get('total', 0)}, failed: {batch_status.get('failed', 0)}/{batch_status.get('total', 0)})")
+    
     # Return the updated status
     return batch_status
 
@@ -943,3 +954,51 @@ async def download_batch_videos(
     except Exception as e:
         logger.error(f"Error creating batch ZIP: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating batch ZIP: {str(e)}")
+
+
+@router.post("/video/clean_expired")
+async def clean_expired_jobs(
+    max_age: int = Query(300, description="Maximum age in seconds for jobs before cleaning"),
+    video_service: VideoService = Depends(get_video_service)
+):
+    """
+    Clean up single inference jobs that have been in the queue too long.
+    
+    Args:
+        max_age: Maximum job age in seconds (default: 300 seconds/5 minutes)
+    
+    Returns:
+        Dict with number of expired jobs cleaned up
+    """
+    try:
+        # Create a method call to clean up the jobs
+        async def clean_jobs():
+            if not hasattr(video_service, "_clean_expired_jobs"):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Clean expired jobs function not available"
+                )
+            
+            # We need to access the internal queue first and check size
+            queue_size_before = video_service.job_queue.qsize()
+            logger.info(f"Queue size before cleaning: {queue_size_before}")
+            
+            # Call the cleaning method
+            await video_service._clean_expired_jobs(max_age)
+            
+            # Check queue size after
+            queue_size_after = video_service.job_queue.qsize()
+            logger.info(f"Queue size after cleaning: {queue_size_after}")
+            
+            return {
+                "queue_size_before": queue_size_before,
+                "queue_size_after": queue_size_after,
+                "expired_jobs_removed": queue_size_before - queue_size_after
+            }
+            
+        result = await clean_jobs()
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error cleaning expired jobs: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error cleaning expired jobs: {str(e)}")

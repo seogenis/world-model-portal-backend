@@ -88,6 +88,7 @@ class VideoStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETE = "complete"
     FAILED = "failed"
+    EXPIRED = "expired"
 
 
 class VideoGenerationRequest(BaseModel):

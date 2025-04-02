@@ -21,7 +21,20 @@ class VideoService:
     def __init__(self):
         """Initialize the video service with API credentials and worker pool."""
         settings = get_settings()
-        self.nvidia_api_key = settings.NVIDIA_API_KEY
+        
+        # Initialize API keys from settings
+        self.primary_api_key = settings.NVIDIA_API_KEY
+        self.backup_keys = [
+            settings.NVIDIA_API_KEY_BACKUP1,
+            settings.NVIDIA_API_KEY_BACKUP2
+        ]
+        # Filter out empty keys
+        self.backup_keys = [key for key in self.backup_keys if key and len(key) >= 10]
+        
+        # Start with the primary key
+        self.nvidia_api_key = self.primary_api_key
+        self.current_key_index = 0
+        self.enable_key_rotation = settings.ENABLE_API_KEY_ROTATION
         
         # Log API key status (without revealing it)
         if not self.nvidia_api_key or len(self.nvidia_api_key) < 10:
@@ -29,12 +42,12 @@ class VideoService:
         else:
             logger.info(f"NVIDIA API key loaded (length: {len(self.nvidia_api_key)})")
             
+        if self.backup_keys:
+            logger.info(f"Found {len(self.backup_keys)} backup API keys available for rotation")
+            
         self.invoke_url = "https://ai.api.nvidia.com/v1/cosmos/nvidia/cosmos-predict1-7b"
         self.fetch_url_format = "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status/"
-        self.headers = {
-            "Authorization": f"Bearer {self.nvidia_api_key}",
-            "Accept": "application/json",
-        }
+        self._update_headers()
         # In-memory store for job statuses
         self.video_jobs: Dict[str, Dict[str, Any]] = {}
         
@@ -72,19 +85,72 @@ class VideoService:
             # Need to restart in an async context - we'll do this on the next API call
             self.worker_task = None
             logger.info("Worker task will be restarted on next API call")
+            
+    def _update_headers(self):
+        """Update API headers with the current API key"""
+        self.headers = {
+            "Authorization": f"Bearer {self.nvidia_api_key}",
+            "Accept": "application/json",
+        }
+        
+    def rotate_api_key(self):
+        """Rotate to the next available API key in the rotation"""
+        if not self.enable_key_rotation or not self.backup_keys:
+            logger.warning("API key rotation disabled or no backup keys available")
+            return False
+            
+        # Start with first backup key if we're currently on primary
+        if self.nvidia_api_key == self.primary_api_key:
+            self.nvidia_api_key = self.backup_keys[0]
+            self.current_key_index = 0
+            logger.info(f"Rotating from primary API key to backup key 1")
+        else:
+            # Move to next backup key
+            next_index = (self.current_key_index + 1) % len(self.backup_keys)
+            self.current_key_index = next_index
+            self.nvidia_api_key = self.backup_keys[next_index]
+            logger.info(f"Rotating to backup API key {next_index + 1}")
+            
+        # Update headers with new key
+        self._update_headers()
+        return True
     
     async def _job_worker(self):
         """Worker that processes jobs from the queue with rate limiting"""
         logger.info("Starting video generation worker pool")
+        
+        # Maximum age for jobs in queue (5 minutes in seconds)
+        MAX_JOB_AGE = 300  # 5 minutes
+        
         while True:
             try:
                 # Check if we can process more jobs
                 if self.active_jobs < self.max_concurrent_jobs:
                     try:
+                        # Check and clean expired jobs in queue
+                        await self._clean_expired_jobs(MAX_JOB_AGE)
+                        
                         # Get next job with timeout (so we can check active_jobs periodically)
-                        job_id, prompt, websocket = await asyncio.wait_for(
+                        job_id, prompt, websocket, timestamp = await asyncio.wait_for(
                             self.job_queue.get(), timeout=1.0
                         )
+                        
+                        # Check if job is too old
+                        current_time = time.time()
+                        job_age = current_time - timestamp
+                        
+                        if job_age > MAX_JOB_AGE:
+                            # Skip this job and update its status
+                            logger.warning(f"Skipping job {job_id} as it's too old ({job_age:.1f} seconds)")
+                            self.video_jobs[job_id] = {
+                                "status": "expired",
+                                "message": f"Job expired after waiting in queue for {job_age:.1f} seconds",
+                                "progress": 0,
+                                "video_url": None
+                            }
+                            # Mark job as done in queue and continue
+                            self.job_queue.task_done()
+                            continue
                         
                         # Update job status
                         self.video_jobs[job_id]["status"] = "starting"
@@ -121,6 +187,58 @@ class VideoService:
             except Exception as e:
                 logger.error(f"Error in job worker: {e}")
                 await asyncio.sleep(1)  # Avoid tight loop in case of persistent errors
+                
+    async def _clean_expired_jobs(self, max_age_seconds):
+        """Clean up expired jobs from the queue
+        
+        Args:
+            max_age_seconds: Maximum job age in seconds before removing from queue
+        """
+        # We can't directly access queue items, need to rebuild the queue
+        temp_queue = asyncio.Queue()
+        expired_count = 0
+        
+        # Try to get all items from the queue without blocking
+        while True:
+            try:
+                job_id, prompt, websocket, timestamp = await asyncio.wait_for(
+                    self.job_queue.get(), timeout=0.01
+                )
+                
+                # Check job age
+                current_time = time.time()
+                job_age = current_time - timestamp
+                
+                if job_age > max_age_seconds:
+                    # Job expired, update status
+                    logger.warning(f"Removing expired job {job_id} from queue (age: {job_age:.1f} seconds)")
+                    self.video_jobs[job_id] = {
+                        "status": "expired",
+                        "message": f"Job expired after waiting in queue for {job_age:.1f} seconds",
+                        "progress": 0,
+                        "video_url": None
+                    }
+                    expired_count += 1
+                    # Job is not added back to the queue
+                else:
+                    # Job is still valid, add it back to the temp queue
+                    await temp_queue.put((job_id, prompt, websocket, timestamp))
+                
+                # Mark as done in original queue
+                self.job_queue.task_done()
+                
+            except asyncio.TimeoutError:
+                # No more items in the queue
+                break
+        
+        # Now add all items from temp queue back to original queue
+        while not temp_queue.empty():
+            item = await temp_queue.get()
+            await self.job_queue.put(item)
+            temp_queue.task_done()
+        
+        if expired_count > 0:
+            logger.info(f"Cleaned {expired_count} expired jobs from the queue")
     
     async def generate_video(self, prompt: str) -> str:
         """
@@ -145,9 +263,10 @@ class VideoService:
             "video_url": None
         }
         
-        # Add job to the queue for processing by worker pool
+        # Add job to the queue for processing by worker pool with current timestamp
         logger.debug(f"Queueing job {job_id}")
-        await self.job_queue.put((job_id, prompt, None))  # Pass None for websocket parameter
+        current_time = time.time()
+        await self.job_queue.put((job_id, prompt, None, current_time))  # Added timestamp
         
         # Return job_id immediately
         return job_id
@@ -251,12 +370,69 @@ class VideoService:
                             elif initial_response.status in [401, 403]:
                                 error_text = await initial_response.text()
                                 logger.error(f"NVIDIA API authentication error: {initial_response.status}, {error_text}")
-                                raise ValueError(f"NVIDIA API authentication error: {initial_response.status} - check your API key")
+                                
+                                # Try to rotate API key if enabled
+                                if self.rotate_api_key():
+                                    logger.info("API key rotated due to authentication error, retrying request")
+                                    # Retry the request with the new key
+                                    async with session.post(self.invoke_url, headers=self.headers, json=payload) as retry_response:
+                                        if retry_response.status in [200, 202]:
+                                            logger.info("Request succeeded after API key rotation")
+                                            initial_response = retry_response
+                                            # Continue processing with the new response
+                                        else:
+                                            # Still failing, raise error
+                                            retry_error = await retry_response.text()
+                                            logger.error(f"Request still failing after API key rotation: {retry_response.status}, {retry_error}")
+                                            raise ValueError(f"NVIDIA API authentication error persists after key rotation: {retry_response.status}")
+                                else:
+                                    # No key rotation available
+                                    raise ValueError(f"NVIDIA API authentication error: {initial_response.status} - check your API key")
+                                
+                            elif initial_response.status == 429:
+                                # Rate limit error - try key rotation
+                                error_text = await initial_response.text()
+                                logger.warning(f"NVIDIA API rate limited: {error_text}")
+                                
+                                # Try to rotate API key if enabled
+                                if self.rotate_api_key():
+                                    logger.info("API key rotated due to rate limit error, retrying request")
+                                    # Retry the request with the new key
+                                    async with session.post(self.invoke_url, headers=self.headers, json=payload) as retry_response:
+                                        if retry_response.status in [200, 202]:
+                                            logger.info("Request succeeded after API key rotation")
+                                            initial_response = retry_response
+                                            # Continue processing with the new response
+                                        else:
+                                            # Still failing, raise error
+                                            retry_error = await retry_response.text()
+                                            logger.error(f"Request still failing after API key rotation: {retry_response.status}, {retry_error}")
+                                            raise RuntimeError(f"NVIDIA API rate limit persists after key rotation: {retry_response.status}")
+                                else:
+                                    # No key rotation available
+                                    raise RuntimeError(f"NVIDIA API rate limited: {error_text} - possibly due to shared API usage")
                                 
                             elif initial_response.status not in [200, 202]:
                                 error_text = await initial_response.text()
                                 logger.error(f"NVIDIA API error: {initial_response.status}, {error_text}")
-                                raise RuntimeError(f"NVIDIA API error: {initial_response.status}, {error_text}")
+                                
+                                # Try to rotate API key for other errors too
+                                if self.rotate_api_key():
+                                    logger.info(f"API key rotated due to error {initial_response.status}, retrying request")
+                                    # Retry the request with the new key
+                                    async with session.post(self.invoke_url, headers=self.headers, json=payload) as retry_response:
+                                        if retry_response.status in [200, 202]:
+                                            logger.info("Request succeeded after API key rotation")
+                                            initial_response = retry_response
+                                            # Continue processing with the new response
+                                        else:
+                                            # Still failing, raise error
+                                            retry_error = await retry_response.text()
+                                            logger.error(f"Request still failing after API key rotation: {retry_response.status}, {retry_error}")
+                                            raise RuntimeError(f"NVIDIA API error persists after key rotation: {initial_response.status}, {error_text}")
+                                else:
+                                    # No key rotation available
+                                    raise RuntimeError(f"NVIDIA API error: {initial_response.status}, {error_text}")
                             
                             # For status 200: immediate response (rare)
                             if initial_response.status == 200:
@@ -361,15 +537,88 @@ class VideoService:
                                     elif status_code == 429:
                                         error_text = await status_response.text()
                                         logger.warning(f"Rate limited during polling: {error_text}")
-                                        # Increase poll interval more aggressively
-                                        poll_interval = min(poll_interval * 2, max_poll_interval)
-                                        continue
+                                        
+                                        # Try to rotate API key if enabled
+                                        if self.rotate_api_key():
+                                            logger.info("API key rotated due to rate limit during polling, retrying poll")
+                                            # Update fetch URL with new headers
+                                            async with session.get(fetch_url, headers=self.headers) as retry_response:
+                                                if retry_response.status == 200:
+                                                    logger.info("Polling succeeded after API key rotation")
+                                                    content = await retry_response.read()
+                                                    content_type = retry_response.headers.get('Content-Type', '')
+                                                    break
+                                                elif retry_response.status == 202:
+                                                    logger.info("Polling still in progress after API key rotation")
+                                                    # Continue with normal polling
+                                                    poll_interval = min(poll_interval * 1.5, max_poll_interval)
+                                                    continue
+                                                else:
+                                                    # Something else went wrong
+                                                    logger.warning(f"Polling still failing after API key rotation: {retry_response.status}")
+                                                    # Fall back to increasing poll interval
+                                                    poll_interval = min(poll_interval * 2, max_poll_interval)
+                                                    continue
+                                        else:
+                                            # No key rotation available, just increase poll interval
+                                            poll_interval = min(poll_interval * 2, max_poll_interval)
+                                            continue
+                                        
+                                    # Authentication errors (401/403)
+                                    elif status_code in [401, 403]:
+                                        error_text = await status_response.text()
+                                        logger.error(f"Authentication error during polling: {status_code}, {error_text}")
+                                        
+                                        # Try to rotate API key if enabled
+                                        if self.rotate_api_key():
+                                            logger.info("API key rotated due to authentication error during polling, retrying poll")
+                                            # Update fetch URL with new headers
+                                            async with session.get(fetch_url, headers=self.headers) as retry_response:
+                                                if retry_response.status in [200, 202]:
+                                                    logger.info("Polling succeeded after API key rotation")
+                                                    if retry_response.status == 200:
+                                                        content = await retry_response.read()
+                                                        content_type = retry_response.headers.get('Content-Type', '')
+                                                        break
+                                                    else:
+                                                        # Still processing
+                                                        continue
+                                                else:
+                                                    # Still failing 
+                                                    retry_error = await retry_response.text()
+                                                    logger.error(f"Polling still failing after API key rotation: {retry_response.status}, {retry_error}")
+                                                    raise RuntimeError(f"Authentication error persists during polling after key rotation: {retry_response.status}")
+                                        else:
+                                            # No key rotation available
+                                            raise RuntimeError(f"Authentication error during polling: {status_code}, {error_text}")
                                         
                                     # Other errors
                                     else:
                                         error_text = await status_response.text()
                                         logger.error(f"Error during polling: {status_code}, {error_text}")
-                                        raise RuntimeError(f"Error during polling: {status_code}, {error_text}")
+                                        
+                                        # Try to rotate API key for other errors too
+                                        if self.rotate_api_key():
+                                            logger.info(f"API key rotated due to error {status_code} during polling, retrying poll")
+                                            # Update fetch URL with new headers
+                                            async with session.get(fetch_url, headers=self.headers) as retry_response:
+                                                if retry_response.status in [200, 202]:
+                                                    logger.info("Polling succeeded after API key rotation")
+                                                    if retry_response.status == 200:
+                                                        content = await retry_response.read()
+                                                        content_type = retry_response.headers.get('Content-Type', '')
+                                                        break
+                                                    else:
+                                                        # Still processing
+                                                        continue
+                                                else:
+                                                    # Still failing
+                                                    retry_error = await retry_response.text()
+                                                    logger.error(f"Polling still failing after API key rotation: {retry_response.status}, {retry_error}")
+                                                    raise RuntimeError(f"Error persists during polling after key rotation: {status_code}, {error_text}")
+                                        else:
+                                            # No key rotation available
+                                            raise RuntimeError(f"Error during polling: {status_code}, {error_text}")
                                         
                             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                                 logger.warning(f"Network error during polling: {str(e)}")

@@ -7,6 +7,7 @@ A high-performance backend for managing text-to-video generation using NVIDIA's 
 - **Video Generation**: Generate high-quality videos from text prompts using NVIDIA's Cosmos model
 - **REST API Status Updates**: Efficient status tracking via stateless GET endpoints
 - **Multi-GPU Batch Processing**: Generate multiple videos in parallel across 8 GPUs
+- **API Key Rotation**: Automatic fallback to backup keys when rate limits or errors occur
 - **Prompt Enhancement**: Convert basic concepts into detailed prompts
 - **Parameter Extraction**: Identify key parameters from text descriptions
 - **Prompt Updating**: Make targeted changes to prompts based on user requests
@@ -15,6 +16,7 @@ A high-performance backend for managing text-to-video generation using NVIDIA's 
 - **Rate Limiting**: Global semaphore to handle NVIDIA API rate limits
 - **Persistent Session Management**: In-memory session storage with disk persistence across restarts
 - **Filesystem-Based State Recovery**: Self-healing state recovery based on directory structure
+- **Queue Management**: Auto-expiration of stale queue items and manual cleanup API
 
 ## ⚙️ Architecture
 
@@ -53,7 +55,10 @@ The system consists of these main components:
 3. Create a `.env` file with your API keys:
    ```
    OPENAI_API_KEY=your_openai_api_key
-   NVIDIA_API_KEY=your_nvidia_api_key
+   NVIDIA_API_KEY=your_primary_nvidia_api_key
+   NVIDIA_API_KEY_BACKUP1=your_backup_nvidia_api_key1
+   NVIDIA_API_KEY_BACKUP2=your_backup_nvidia_api_key2
+   ENABLE_API_KEY_ROTATION=True
    ```
 
 ### Running the Server
@@ -85,6 +90,7 @@ The backend uses an asynchronous processing architecture to handle long-running 
 4. **Stateless Status Endpoints**: Efficient RESTful endpoints with filesystem validation
 5. **Retry Mechanism**: Exponential backoff and retry for NVIDIA API rate limits
 6. **Filesystem State Recovery**: Directory structure used to recover state after service restarts
+7. **Queue Management**: Automatic expiration of jobs older than 5 minutes with manual cleanup endpoint
 
 ## 🖥️ Key API Endpoints
 
@@ -98,6 +104,7 @@ The backend uses an asynchronous processing architecture to handle long-running 
 - `POST /api/video/batch_inference`: Process multiple prompts in parallel (up to 8 GPUs)
 - `GET /api/video/batch_status/{batch_id}`: Get batch status with comprehensive filesystem scanning
 - `GET /api/video/batch_download/{batch_id}`: Download all batch videos as ZIP
+- `POST /api/video/clean_expired`: Manually clean expired jobs from the queue
 
 ### Prompt Management
 
@@ -115,26 +122,37 @@ The backend uses an asynchronous processing architecture to handle long-running 
 
 ## 🛠️ Key Components
 
-### NVIDIA API Interaction
+### NVIDIA API Interaction with Key Rotation
 
-The system interacts with NVIDIA's Cosmos API for video generation:
+The system interacts with NVIDIA's Cosmos API for video generation, with automatic API key rotation:
 
 ```python
-# Core interaction with rate limiting and retry logic
+# Core interaction with rate limiting and API key rotation
 async with nvidia_api_semaphore:  # Global semaphore limits to 1 concurrent request
-    # Send request to NVIDIA API with retry for rate limiting
-    retry_count = 0
-    while retry_count < max_retries:
-        try:
-            # Send API request...
-            if response.status_code == 429:  # Rate limited
-                # Exponential backoff and retry
-                await asyncio.sleep(retry_delay)
-                retry_count += 1
-                continue
-            break  # Success
-        except Exception as e:
-            # Handle errors...
+    try:
+        # Send request to NVIDIA API
+        async with session.post(self.invoke_url, headers=self.headers, json=payload) as response:
+            if response.status == 429:  # Rate limited
+                # Try to rotate API key if enabled
+                if self.rotate_api_key():
+                    logger.info("API key rotated due to rate limit error, retrying request")
+                    # Retry the request with the new key
+                    async with session.post(self.invoke_url, headers=self.headers, json=payload) as retry_response:
+                        if retry_response.status in [200, 202]:
+                            logger.info("Request succeeded after API key rotation")
+                            # Continue processing with the new response
+                            response = retry_response
+                        else:
+                            # Still failing, fall back to original retry logic
+                            raise RuntimeError("API rate limit persists after key rotation")
+                else:
+                    # No key rotation available, use exponential backoff
+                    await asyncio.sleep(retry_delay)
+                    retry_count += 1
+                    continue
+            # Process successful response...
+    except Exception as e:
+        # Handle errors...
 ```
 
 ### Filesystem-Based Status Recovery
@@ -256,30 +274,42 @@ for i, prompt in enumerate(prompts):
 
 ### Recent Improvements
 
-1. **Rate Limiting & Retry Handling**: 
+1. **API Key Rotation**:
+   - Added support for multiple NVIDIA API keys with automatic rotation
+   - Implemented fallback mechanism for rate limits and authentication errors
+   - System automatically switches to backup keys when primary key encounters errors
+   - Added configuration option to enable/disable key rotation
+
+2. **Rate Limiting & Retry Handling**: 
    - Added global semaphore for NVIDIA API access across services
    - Implemented exponential backoff retry logic
    - Added proper error handling for 429 rate limit responses
 
-2. **Robust Status Updates**:
+3. **Robust Status Updates**:
    - Enhanced REST API endpoints with filesystem validation
    - Added self-healing state recovery from directory structure
    - Improved cross-referencing between job and batch IDs
 
-3. **Asynchronous Processing Architecture**:
+4. **Asynchronous Processing Architecture**:
    - Implemented proper worker pools for background processing
    - Added job queues for managing video generation tasks
    - Fixed "no running event loop" issues in async initialization
 
-4. **Persistent Session Management**:
+5. **Persistent Session Management**:
    - Implemented disk-based session persistence across restarts
    - Added singleton pattern to prevent multiple instances losing sessions
    - Implemented efficient loading/cleanup of sessions from disk
 
-5. **State Recovery System**:
+6. **State Recovery System**:
    - Added filesystem scanning to recover job status after restarts
    - Implemented hierarchical directory structure for batch and job organization
    - Enhanced error handling with filesystem evidence prioritization
+
+7. **Queue Management**:
+   - Added automatic expiration of stale queue items (older than 5 minutes)
+   - Implemented job timestamps for age tracking
+   - Created manual cleanup API for removing stale jobs
+   - Added "expired" status for jobs removed from queue due to age
 
 ### Video Generation Flow
 
@@ -340,6 +370,8 @@ This project is optimized for deployment on a Brev.dev instance with 8 GPUs:
 4. **Custom Prompt Templates**: User-defined prompt templates and styles
 5. **Enhanced State Persistence**: Improved file-based persistence for high-reliability
 6. **Distributed Storage**: Add optional distributed storage for high-availability deployments
+7. **Advanced API Key Management**: Key usage tracking, rotation scheduling, and health monitoring
+8. **Dynamic Rate Limiting**: Adjust concurrency based on observed API behavior
 
 ## License
 

@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # API Keys Configuration
     OPENAI_API_KEY: str = ""
     NVIDIA_API_KEY: str = ""
+    NVIDIA_API_KEY_BACKUP1: str = ""
+    NVIDIA_API_KEY_BACKUP2: str = ""
     
     # Session configuration
     CACHE_TTL: int = 3600  # Session TTL in seconds (1 hour)
@@ -33,6 +35,7 @@ class Settings(BaseSettings):
     NVIDIA_MAX_CONCURRENT: int = 1  # Maximum concurrent NVIDIA API calls
     NVIDIA_RETRY_DELAY: int = 5  # Seconds to wait before retrying after rate limit
     NVIDIA_RETRY_ATTEMPTS: int = 3  # Maximum number of retry attempts
+    ENABLE_API_KEY_ROTATION: bool = True  # Whether to rotate API keys on errors
     
     class Config:
         env_file = ".env"
