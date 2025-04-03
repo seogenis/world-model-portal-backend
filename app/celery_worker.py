@@ -2,7 +2,7 @@
 
 import asyncio
 from celery import Celery
-from services.video_service import VideoService # adjust this import to match your project structure
+from app.services.video_service import VideoService # adjust this import to match your project structure
 
 # Tailscale IPs for your EC2 orchestrator instance
 RABBITMQ_HOST = "100.70.212.98"   # replace with actual Tailscale IP
