@@ -37,7 +37,6 @@ from app.core.logger import get_logger
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException, Depends
-from app.schemas.video import VideoStatusResponse
 from app.services.video import get_video_service, VideoService
 from app.celery_worker import celery_app
 import logging
