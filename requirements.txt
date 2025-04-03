@@ -1,3 +1,4 @@
+celery[redis]
 fastapi>=0.104.0
 uvicorn>=0.23.2
 httpx>=0.25.0

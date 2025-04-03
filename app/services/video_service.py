@@ -17,7 +17,7 @@ settings = get_settings()
 
 class VideoService:
     """Service for handling video generation requests using Nvidia's API."""
-    
+
     def __init__(self):
         """Initialize the video service with API credentials and worker pool."""
         settings = get_settings()
@@ -777,3 +777,20 @@ class VideoService:
                     error_file.write(f"Error: {str(e)}\n\nStack trace:\n{error_details}")
             except Exception as file_error:
                 logger.warning(f"Failed to save error details to file: {file_error}")
+
+    async def _process_video_generation_job(self, prompt: str) -> str:
+        """
+        Wrapper that uses the existing method to generate a video from a prompt.
+        Returns the final video_url on success.
+        """
+        job_id = str(uuid.uuid4())
+        await self._process_video_generation(job_id, prompt)
+        
+        result = self.video_jobs.get(job_id)
+        if not result:
+            raise RuntimeError("Job result missing from in-memory store")
+
+        if result.get("status") == "complete":
+            return result["video_url"]
+        else:
+            raise RuntimeError(result.get("message", "Unknown error during video generation"))

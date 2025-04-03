@@ -35,6 +35,13 @@ from app.api.schemas import (
 from app.core.config import get_settings
 from app.core.logger import get_logger
 
+from celery.result import AsyncResult
+from fastapi import APIRouter, HTTPException, Depends
+from app.schemas.video import VideoStatusResponse
+from app.services.video import get_video_service, VideoService
+from app.celery_worker import celery_app
+import logging
+
 router = APIRouter()
 settings = get_settings()
 logger = get_logger()
@@ -369,7 +376,7 @@ async def delete_session(
         logger.error(f"Error deleting session: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error deleting session: {str(e)}")
 
-
+'''
 @router.post("/video/single_inference", response_model=Dict[str, str])
 async def generate_single_video(
     request: VideoGenerationRequest,
@@ -387,8 +394,96 @@ async def generate_single_video(
     except Exception as e:
         logger.error(f"Error starting video generation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error starting video generation: {str(e)}")
+'''
 
+@router.post("/video/single_inference", response_model=Dict[str, str])
+async def generate_single_video(
+    request: VideoGenerationRequest,
+    video_service: VideoService = Depends(get_video_service)
+):
+    """
+    Generate a video from a text prompt using Nvidia API.
+    
+    This endpoint initiates the video generation process and returns a job ID.
+    The client can check status using the status endpoint.
+    """
+    try:
+        # Submit to Celery (async in background, not using video_service directly)
+        task = run_video_generation.delay(request.prompt)
 
+        return {
+            "job_id": task.id,
+            "message": "Video generation started. Check status endpoint for updates."
+        }
+    except Exception as e:
+        logger.error(f"Error starting video generation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error starting video generation: {str(e)}")
+
+@router.get("/video/status/{job_id}", response_model=VideoStatusResponse)
+async def get_video_status(
+    job_id: str,
+    video_service: VideoService = Depends(get_video_service)
+):
+    """
+    Get the current status of a video generation task by job ID.
+    This queries the Celery task backend (Redis) for task state and result.
+    """
+    try:
+        task = AsyncResult(job_id, app=celery_app)
+
+        if task.state == "PENDING":
+            return VideoStatusResponse(
+                job_id=job_id,
+                status="pending",
+                message="Job is queued and will start soon.",
+                progress=0,
+                video_url=None
+            )
+
+        elif task.state == "STARTED":
+            return VideoStatusResponse(
+                job_id=job_id,
+                status="generating",
+                message="Video generation in progress...",
+                progress=50,
+                video_url=None
+            )
+
+        elif task.state == "SUCCESS":
+            return VideoStatusResponse(
+                job_id=job_id,
+                status="complete",
+                message="Video generation complete.",
+                progress=100,
+                video_url=task.result  # expected to be a URL
+            )
+
+        elif task.state == "FAILURE":
+            return VideoStatusResponse(
+                job_id=job_id,
+                status="failed",
+                message=f"Video generation failed: {str(task.result)}",
+                progress=0,
+                video_url=None
+            )
+
+        else:
+            return VideoStatusResponse(
+                job_id=job_id,
+                status=task.state.lower(),
+                message="Job is in an unknown state.",
+                progress=0,
+                video_url=None
+            )
+
+    except Exception as e:
+        logger.error(f"Error getting video status for job {job_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error retrieving video status: {str(e)}"
+        )
+
+'''
 @router.get("/video/status/{job_id}", response_model=VideoStatusResponse)
 async def get_video_status(
     job_id: str,
@@ -575,7 +670,7 @@ async def get_video_status(
             status_code=500,
             detail=f"Error retrieving video status: {str(e)}"
         )
-
+'''
 
 
 
