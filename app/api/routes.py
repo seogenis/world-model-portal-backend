@@ -37,6 +37,7 @@ from app.core.logger import get_logger
 
 from celery.result import AsyncResult
 from app.celery_worker import celery_app
+from app.celery_worker import run_video_generation
 import logging
 
 router = APIRouter()
