@@ -39,6 +39,14 @@ from celery.result import AsyncResult
 from app.celery_worker import celery_app
 from app.celery_worker import run_video_generation
 import logging
+from boto3 import client
+
+s3 = client(
+    "s3",
+    region_name=settings.AWS_REGION,
+    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+)
 
 router = APIRouter()
 settings = get_settings()
@@ -446,12 +454,22 @@ async def get_video_status(
                 video_url=None
             )
         elif task.state == "SUCCESS":
+
+            try:
+                url = s3.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": "cosmos-storage", "Key": task.result},
+                    ExpiresIn=300 # 5 minutes
+                )
+            except ClientError as e:
+                raise HTTPException(status_code=500, detail=f"Could not generate URL: {e}")
+
             return VideoStatusResponse(
                 job_id=job_id,
                 status=VideoStatus.COMPLETE,
                 message="Video generation complete.",
                 progress=100,
-                video_url=task.result  # expected to be a URL
+                video_url=url  # expected to be a URL
             )
         elif task.state == "FAILURE":
             return VideoStatusResponse(
