@@ -14,7 +14,7 @@ celery_app = Celery(
     backend=f"redis://{REDIS_HOST}:6379/0"
 )
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True)
 def run_video_generation(self, prompt: str) -> str:
     """
     Celery task to generate a video via VideoService and return the video URL.
