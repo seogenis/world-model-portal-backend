@@ -13,8 +13,13 @@ celery_app = Celery(
     broker=f"pyamqp://guest@{RABBITMQ_HOST}:5672//",
     backend=f"redis://{REDIS_HOST}:6379/0"
 )
+celery_app.conf.task_acks_on_failure_or_timeout = True
 
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True)
+@celery_app.task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 3, "countdown": 15}
+)
 def run_video_generation(self, prompt: str) -> str:
     """
     Celery task to generate a video via VideoService and return the video URL.
