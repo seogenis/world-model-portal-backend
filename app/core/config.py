@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     NVIDIA_API_KEY_BACKUP1: str = ""
     NVIDIA_API_KEY_BACKUP2: str = ""
     
+    # AWS Configuration
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-west-2"  # Default region
+    
     # Session configuration
     CACHE_TTL: int = 3600  # Session TTL in seconds (1 hour)
     

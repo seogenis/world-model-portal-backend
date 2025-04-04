@@ -59,6 +59,11 @@ The system consists of these main components:
    NVIDIA_API_KEY_BACKUP1=your_backup_nvidia_api_key1
    NVIDIA_API_KEY_BACKUP2=your_backup_nvidia_api_key2
    ENABLE_API_KEY_ROTATION=True
+   
+   # AWS Configuration
+   AWS_ACCESS_KEY_ID=your_aws_access_key
+   AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+   AWS_REGION=us-west-2  # or your preferred region
    ```
 
 ### Running the Server
