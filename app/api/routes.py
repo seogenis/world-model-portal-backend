@@ -432,43 +432,40 @@ async def get_video_status(
         if task.state == "PENDING":
             return VideoStatusResponse(
                 job_id=job_id,
-                status="pending",
+                status=VideoStatus.PENDING,
                 message="Job is queued and will start soon.",
                 progress=0,
                 video_url=None
             )
-
         elif task.state == "STARTED":
             return VideoStatusResponse(
                 job_id=job_id,
-                status="generating",
+                status=VideoStatus.GENERATING,
                 message="Video generation in progress...",
                 progress=50,
                 video_url=None
             )
-
         elif task.state == "SUCCESS":
             return VideoStatusResponse(
                 job_id=job_id,
-                status="complete",
+                status=VideoStatus.COMPLETE,
                 message="Video generation complete.",
                 progress=100,
                 video_url=task.result  # expected to be a URL
             )
-
         elif task.state == "FAILURE":
             return VideoStatusResponse(
                 job_id=job_id,
-                status="failed",
+                status=VideoStatus.FAILED,
                 message=f"Video generation failed: {str(task.result)}",
                 progress=0,
                 video_url=None
             )
-
         else:
+            # For any other state, default to processing.
             return VideoStatusResponse(
                 job_id=job_id,
-                status=task.state.lower(),
+                status=VideoStatus.PROCESSING,
                 message="Job is in an unknown state.",
                 progress=0,
                 video_url=None
