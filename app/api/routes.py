@@ -415,7 +415,7 @@ async def generate_single_video(
     """
     try:
         # Submit to Celery (async in background, not using video_service directly)
-        task = run_video_generation.delay(request.prompt)
+        task = run_video_generation.delay(request.prompt, request.video_key)
 
         return {
             "job_id": task.id,
@@ -424,6 +424,34 @@ async def generate_single_video(
     except Exception as e:
         logger.error(f"Error starting video generation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error starting video generation: {str(e)}")
+
+@router.get("/video/upload-url")
+async def generate_upload_url():
+    key = f"uploads/{uuid.uuid4()}.mp4"
+
+    try:
+        url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={
+                "Bucket": "cosmos-storage",
+                "Key": key,
+                "ContentType": "video/mp4"
+            },
+            ExpiresIn=300
+        )
+
+        return {
+            "upload_url": url,
+            "file_key": key,
+            "expires_in": 300
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating presigned upload url")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error generating presigned upload url"
+        )
 
 @router.get("/video/status/{job_id}", response_model=VideoStatusResponse)
 async def get_video_status(

@@ -2,6 +2,7 @@ from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, validator
 from enum import Enum
 from uuid import UUID
+from typing import Optional
 
 
 class SessionRequest(BaseModel):
@@ -94,6 +95,7 @@ class VideoStatus(str, Enum):
 class VideoGenerationRequest(BaseModel):
     """Request model for generating a video from a prompt."""
     prompt: str = Field(..., description="The text-to-video prompt")
+    video_key: Optional[str] = Field(default=None, description="The file key for optional video upload")
     
     
 class BatchVideoGenerationRequest(BaseModel):

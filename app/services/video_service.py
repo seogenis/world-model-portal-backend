@@ -272,13 +272,14 @@ class VideoService:
         return job_id
         
 
-    async def _process_video_generation(self, job_id: str, prompt: str, websocket=None) -> None:
+    async def _process_video_generation(self, job_id: str, prompt: str, video_path: str, websocket=None) -> None:
         """
         Process the video generation job using NVIDIA's official API pattern.
         
         Args:
             job_id: The job ID
             prompt: The text-to-video prompt
+            video_path: The path to user's video (optional, None if not included)
             websocket: Parameter kept for backward compatibility
         """
         try:
@@ -778,13 +779,13 @@ class VideoService:
             except Exception as file_error:
                 logger.warning(f"Failed to save error details to file: {file_error}")
 
-    async def _process_video_generation_job(self, prompt: str) -> str:
+    async def _process_video_generation_job(self, prompt: str, video_path: str) -> str:
         """
         Wrapper that uses the existing method to generate a video from a prompt.
         Returns the final video_url on success.
         """
         job_id = str(uuid.uuid4())
-        await self._process_video_generation(job_id, prompt)
+        await self._process_video_generation(job_id, prompt, video_path)
         
         result = self.video_jobs.get(job_id)
         if not result:

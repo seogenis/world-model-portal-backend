@@ -44,16 +44,20 @@ celery_app.conf.task_acks_on_failure_or_timeout = True
     autoretry_for=(Exception,),
     retry_kwargs={"max_retries": 3, "countdown": 15}
 )
-def run_video_generation(self, prompt: str) -> str:
+def run_video_generation(self, prompt: str, video_key: str) -> str:
     """
     Celery task to generate a video via VideoService and return the video URL.
     """
     try:
+        video_path = None
+        if video_key != None: # additional video needed for inference
+            video_path = download_video_from_s3(video_key)
+
         service = VideoService()
 
         # Call the service's async method from sync context
         loop = asyncio.get_event_loop()
-        video_url = loop.run_until_complete(service._process_video_generation_job(prompt))
+        video_url = loop.run_until_complete(service._process_video_generation_job(prompt, video_path))
 
         s3_key = upload_video_to_s3(video_url)
 
@@ -66,10 +70,21 @@ def upload_video_to_s3(video_url: str) -> str:
     Uploads the video file to S3 under a folder named with the job_id.
     Returns the S3 key for the uploaded video.
     """
-    bucket_name = "cosmos-storage"  # e.g., "my-video-bucket-2025"
-    s3_key = video_url   # Organize by job_id
+    bucket_name = "cosmos-storage"
+    s3_key = video_url
+    local_file_path = video_url
     try:
         s3_client.upload_file(local_file_path, bucket_name, s3_key)
         return s3_key
     except Exception as e:
         raise RuntimeError(f"Failed to upload video: {str(e)}")
+
+def download_video_from_s3(video_key: str) -> str:
+    bucket_name = "cosmos-storage"
+    local_file_path = video_key
+    try:
+        s3.download_file(bucket_name, video_key, local_file_path)
+        print(f"✅ File downloaded: {local_file_path}")
+        return local_file_path
+    except Exception as e:
+        print(f"❌ Failed to download file: {e}")
