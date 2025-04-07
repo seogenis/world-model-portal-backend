@@ -1,1 +1,5 @@
+#!/bin/bash
+
+echo "Starting celery worker"
+
 celery -A app.celery_worker.celery_app worker --loglevel=info --concurrency=1

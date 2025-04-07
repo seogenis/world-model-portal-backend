@@ -41,16 +41,16 @@ from app.celery_worker import run_video_generation
 import logging
 from boto3 import client
 
+router = APIRouter()
+settings = get_settings()
+logger = get_logger()
+
 s3 = client(
     "s3",
     region_name=settings.AWS_REGION,
     aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
     aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
 )
-
-router = APIRouter()
-settings = get_settings()
-logger = get_logger()
 
 # Create static directory for videos if it doesn't exist
 os.makedirs("static/videos", exist_ok=True)
