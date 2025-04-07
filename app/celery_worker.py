@@ -37,7 +37,7 @@ celery_app = Celery(
     broker=f"pyamqp://guest@{RABBITMQ_HOST}:5672//",
     backend=f"redis://{REDIS_HOST}:6379/0"
 )
-celery_app.conf.task_acks_on_failure_or_timeout = True
+#celery_app.conf.task_acks_on_failure_or_timeout = True
 
 @celery_app.task(
     bind=True,
