@@ -73,7 +73,7 @@ def upload_video_to_s3(video_url: str) -> str:
     """
     bucket_name = "cosmos-storage"
     s3_key = video_url
-    local_file_path = video_url
+    local_file_path = "/workspace/world-model-portal-backend"+video_url
     try:
         s3_client.upload_file(local_file_path, bucket_name, s3_key)
         return s3_key

@@ -216,7 +216,7 @@ class VideoService:
 
     # Remove the _detect_input_type_and_frames method as it's no longer needed
 
-async def _process_video_generation(self, job_id: str, prompt: str, video_path: str = None, websocket=None) -> None:
+    async def _process_video_generation(self, job_id: str, prompt: str, video_path: str = None, websocket=None) -> None:
         """
         Process the video generation job using the local Cosmos installation.
         
