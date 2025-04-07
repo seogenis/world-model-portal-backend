@@ -214,14 +214,16 @@ class VideoService:
         return job_id
         
 
-    async def _process_video_generation(self, job_id: str, prompt: str, video_path: str, websocket=None) -> None:
+    # Remove the _detect_input_type_and_frames method as it's no longer needed
+
+async def _process_video_generation(self, job_id: str, prompt: str, video_path: str = None, websocket=None) -> None:
         """
         Process the video generation job using the local Cosmos installation.
         
         Args:
             job_id: The job ID
             prompt: The text-to-video prompt
-            video_path: The path to user's video (optional, None if not included)
+            video_path: Optional path to user's video/image for video2world
             websocket: Parameter kept for backward compatibility
         """
         try:
@@ -261,6 +263,28 @@ class VideoService:
                 "video_url": None
             }
             
+            # Determine if this is a text2world or video2world job
+            model_type = "text2world"
+            num_input_frames = 1
+            
+            if video_path:
+                model_type = "video2world"
+                # Check file extension to determine if image or video
+                file_ext = video_path.split('.')[-1].lower()
+                
+                # Image formats
+                if file_ext in ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp']:
+                    num_input_frames = 1
+                    logger.info("Using image input with 1 frame")
+                # Video formats
+                elif file_ext in ['mp4', 'avi', 'mov', 'webm', 'mkv']:
+                    num_input_frames = 9
+                    logger.info("Using video input with 9 frames")
+                else:
+                    # Default to image for any other format
+                    num_input_frames = 1
+                    logger.warning(f"Unsupported file format: {file_ext}, treating as image with 1 frame")
+            
             # We still use a semaphore to prevent multiple concurrent GPU jobs
             async with nvidia_api_semaphore:
                 logger.debug(f"Acquired GPU access for job {job_id}")
@@ -278,21 +302,41 @@ class VideoService:
                 log_file_path = os.path.join(output_dir, "cosmos_log.txt")
                 
                 # Prepare the command to run Cosmos locally
-                cosmos_command = [
-                    "bash", "-c",
-                    f"cd /workspace/Cosmos && "
-                    f"NVTE_FUSED_ATTN=0 "
-                    f"torchrun --nproc_per_node={num_devices} "
-                    f"cosmos1/models/diffusion/nemo/inference/general.py "
-                    f"--model Cosmos-1.0-Diffusion-7B-Text2World "
-                    f"--cp_size {num_devices} "
-                    f"--num_devices {num_devices} "
-                    f"--video_save_path \"{output_video_path}\" "
-                    f"--guidance 7 "
-                    f"--seed 1 "
-                    f"--prompt \"{prompt}\" "
-                    f"> \"{log_file_path}\" 2>&1"
-                ]
+                if model_type == "text2world":
+                    cosmos_command = [
+                        "bash", "-c",
+                        f"cd /workspace/Cosmos && "
+                        f"NVTE_FUSED_ATTN=0 "
+                        f"torchrun --nproc_per_node={num_devices} "
+                        f"cosmos1/models/diffusion/nemo/inference/general.py "
+                        f"--model Cosmos-1.0-Diffusion-7B-Text2World "
+                        f"--cp_size {num_devices} "
+                        f"--num_devices {num_devices} "
+                        f"--video_save_path \"{output_video_path}\" "
+                        f"--guidance 7 "
+                        f"--seed 1 "
+                        f"--prompt \"{prompt}\" "
+                        f"> \"{log_file_path}\" 2>&1"
+                    ]
+                else:  # video2world
+                    cosmos_command = [
+                        "bash", "-c",
+                        f"cd /workspace/Cosmos && "
+                        f"NVTE_FUSED_ATTN=0 "
+                        f"torchrun --nproc_per_node={num_devices} "
+                        f"cosmos1/models/diffusion/nemo/inference/video2world.py "
+                        f"--model Cosmos-1.0-Diffusion-7B-Video2World "
+                        f"--cp_size {num_devices} "
+                        f"--num_devices {num_devices} "
+                        f"--video_save_path \"{output_video_path}\" "
+                        f"--guidance 7 "
+                        f"--seed 1 "
+                        f"--prompt \"{prompt}\" "
+                        f"--conditioned_image_or_video_path \"{video_path}\" "
+                        f"--num_input_frames {num_input_frames} "
+                        f"--enable_prompt_upsampler "
+                        f"> \"{log_file_path}\" 2>&1"
+                    ]
                 
                 # Run the command asynchronously
                 logger.info(f"Running Cosmos command for job {job_id}: {' '.join(cosmos_command)}")

@@ -44,14 +44,15 @@ celery_app.conf.task_acks_on_failure_or_timeout = True
     autoretry_for=(Exception,),
     retry_kwargs={"max_retries": 3, "countdown": 15}
 )
-def run_video_generation(self, prompt: str, video_key: str) -> str:
+def run_video_generation(self, prompt: str, video_key: str = None) -> str:
     """
     Celery task to generate a video via VideoService and return the video URL.
     """
     try:
         video_path = None
-        if video_key != None: # additional video needed for inference
+        if video_key:  # If a video key is provided, download from S3
             video_path = download_video_from_s3(video_key)
+            logger.info(f"Using video/image input from S3: {video_path}")
 
         service = VideoService()
 
