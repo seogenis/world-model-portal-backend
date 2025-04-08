@@ -82,7 +82,7 @@ def download_media_from_s3(s3_key: str) -> str:
     bucket_name = "cosmos-storage"
     local_file_path = s3_key
     try:
-        s3.download_file(bucket_name, s3_key, local_file_path)
+        s3_client.download_file(bucket_name, s3_key, local_file_path)
         print(f"✅ File downloaded: {local_file_path}")
         return local_file_path
     except Exception as e:
