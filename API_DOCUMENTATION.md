@@ -8,8 +8,7 @@ This document describes the available API endpoints for interacting with the Wor
 - [User Flow Sequence](#user-flow-sequence)
 - [Prompt Management Endpoints](#prompt-management-endpoints)
 - [Video Generation Endpoints](#video-generation-endpoints)
-- [Batch Processing Endpoints](#batch-processing-endpoints)
-- [Static File Paths](#static-file-paths)
+- [Removed Endpoints](#removed-endpoints)
 - [Session Management](#session-management)
 - [Status Codes](#status-codes)
 - [Status Values](#status-values)
@@ -29,10 +28,8 @@ The typical user flow follows this sequence:
 2. **Initialize parameters** (`POST /api/initialize`) 
 3. **Generate a single video** (`POST /api/video/single_inference`)
 4. **Generate prompt variations** (`POST /api/generate-variations`)
-5. **Process batch of videos** (`POST /api/video/batch_inference`)
-6. **Update prompt through conversation** (`POST /api/update`)
-7. **Generate new videos with refined prompts** (`POST /api/video/single_inference`)
-8. **Download batch results** (`GET /api/video/batch_download/{batch_id}`)
+5. **Update prompt through conversation** (`POST /api/update`)
+6. **Generate new videos with refined prompts** (`POST /api/video/single_inference`)
 
 ## Prompt Management Endpoints
 
@@ -267,105 +264,16 @@ Get the current status of a single video generation job.
 }
 ```
 
-### 3. Get Video File
+## Removed Endpoints
 
-**Endpoint:** `GET /api/videos/{video_id}`
+The following endpoints have been removed from the API:
 
-Retrieve a generated video file by its ID.
+- `GET /api/videos/{video_id}` - Video file retrieval endpoint
+- `POST /api/video/batch_inference` - Batch video generation endpoint
+- `GET /api/video/batch_status/{batch_id}` - Batch status retrieval endpoint
+- `GET /api/video/batch_download/{batch_id}` - Batch download endpoint
 
-**Response:** The video file (MP4 format).
-
-## Batch Processing Endpoints
-
-### 1. Generate Multiple Videos (Batch)
-
-**Endpoint:** `POST /api/video/batch_inference`
-
-Generates multiple videos in parallel, each on a different GPU.
-
-**Request:**
-```json
-{
-  "prompts": [
-    "A sunset over the ocean with waves crashing on the shore",
-    "A bustling city street at night with neon lights",
-    "A spaceship landing on an alien planet",
-    "A forest with sunlight streaming through the trees"
-  ]
-}
-```
-
-**Response:**
-```json
-{
-  "batch_id": "662e8400-e29b-41d4-a716-446655440123",
-  "message": "Batch processing started for 4 prompts. Check batch_status endpoint for updates."
-}
-```
-
-### 2. Get Batch Status
-
-**Endpoint:** `GET /api/video/batch_status/{batch_id}`
-
-Get the current status of all videos in a batch.
-
-**Response:**
-```json
-{
-  "batch_id": "662e8400-e29b-41d4-a716-446655440123",
-  "status": "processing",
-  "total": 4,
-  "completed": 1,
-  "failed": 0,
-  "message": "Completed: 1/4",
-  "jobs": [
-    {
-      "job_id": "job_0",
-      "status": "complete",
-      "message": "Video generation complete",
-      "progress": 100,
-      "video_url": "/api/videos/662e8400-e29b-41d4-a716-446655440123/job_0/job_0.mp4",
-      "gpu_id": 0,
-      "prompt": "A sunset over the ocean with waves crashing on the shore"
-    },
-    {
-      "job_id": "job_1",
-      "status": "generating",
-      "message": "Generating video from prompt",
-      "progress": 75,
-      "video_url": null,
-      "gpu_id": 1,
-      "prompt": "A bustling city street at night with neon lights"
-    },
-    {
-      "job_id": "job_2",
-      "status": "pending",
-      "message": "Job is queued and waiting to start",
-      "progress": 0,
-      "video_url": null,
-      "gpu_id": 2,
-      "prompt": "A spaceship landing on an alien planet"
-    },
-    {
-      "job_id": "job_3",
-      "status": "pending",
-      "message": "Job is queued and waiting to start",
-      "progress": 0,
-      "video_url": null,
-      "gpu_id": 3,
-      "prompt": "A forest with sunlight streaming through the trees"
-    }
-  ]
-}
-```
-
-### 3. Download Batch Videos as ZIP
-
-**Endpoint:** `GET /api/video/batch_download/{batch_id}`
-
-Download all successfully generated videos from a batch as a ZIP file.
-
-**Response:** A ZIP file containing all generated videos.
+Please use the current S3-based video URLs provided by the `/api/video/status/{job_id}` endpoint for accessing generated videos.
 
 ### 4. Clean Expired Jobs
 
@@ -385,42 +293,43 @@ Manually clean up single inference jobs that have been in the queue too long.
 }
 ```
 
-## Static File Paths
+## Video Storage
 
-The system stores generated videos in a consistent file structure that can be accessed directly:
+The system now stores generated videos in Amazon S3:
 
-### Single Video Paths
+### Video Access
 
-- Standard path: `/static/videos/{job_id}/video.mp4`
-- Example: `/static/videos/550e8400-e29b-41d4-a716-446655440000/video.mp4`
-- When a video generation is complete, the `video_url` field in the status response will provide the direct path
+- When a video generation is complete, the `video_url` field in the status response will provide a presigned S3 URL
+- The presigned URLs typically expire after a few minutes (default: 5 minutes)
+- To access a video after the URL has expired, request a new status via the `/api/video/status/{job_id}` endpoint
 
-### Batch Video Paths
+### S3 Storage Structure
 
-- Standard path: `/static/videos/{batch_id}/{job_id}/video.mp4` 
-- Example: `/static/videos/662e8400-e29b-41d4-a716-446655440123/job_0/video.mp4`
-- Each job in the batch status response includes its own `video_url` when complete
-
-### Fallback Mechanisms
-
-If the standard video paths don't work, the system checks several locations:
-- Legacy format: `/static/videos/{job_id}.mp4`
-- API endpoint access: `/api/videos/{video_id}` (handles all file location patterns)
-- Batch downloads: `/api/video/batch_download/{batch_id}` (returns all videos as ZIP)
+- Videos are stored in the "cosmos-storage" S3 bucket
+- Each video has a unique key generated when the video creation task completes
+- The video_key field (if provided in the request) determines where uploaded videos for reference are stored
 
 ## Frontend Integration Tips
 
 ### Displaying Videos
 
-1. **Direct embedding**: Use the `video_url` from status responses
+1. **Direct embedding**: Use the `video_url` from status responses (these are presigned S3 URLs)
    ```html
-   <video src="/static/videos/550e8400-e29b-41d4-a716-446655440000/video.mp4" controls></video>
+   <video src="https://cosmos-storage.s3.amazonaws.com/path/to/video.mp4?X-Amz-Algorithm=..." controls></video>
    ```
 
-2. **Fallback pattern**: Handle missing video URLs
+2. **Handle URL expiration**: Since S3 presigned URLs expire after a few minutes, implement refresh logic
    ```javascript
-   const videoUrl = statusData.video_url || `/static/videos/${jobId}/video.mp4`;
-   videoElement.src = videoUrl;
+   // Check if URL might be expired (e.g., if it's been more than 4 minutes since last refresh)
+   if (Date.now() - lastRefreshTime > 240000) {
+     // Fetch a new status to get a fresh video URL
+     fetchVideoStatus(jobId).then(status => {
+       if (status.video_url) {
+         videoElement.src = status.video_url;
+         lastRefreshTime = Date.now();
+       }
+     });
+   }
    ```
 
 3. **Efficient polling**: Implement exponential backoff when checking status
@@ -429,13 +338,9 @@ If the standard video paths don't work, the system checks several locations:
    const interval = Math.min(baseInterval * Math.pow(1.1, pollCount), maxInterval);
    ```
 
-4. **Batch display**: Show a grid of videos from batch processing
-   ```javascript
-   batchData.jobs.forEach(job => {
-     if (job.status === 'complete' && job.video_url) {
-       // Display video using job.video_url
-     }
-   });
+4. **Cross-origin considerations**: Ensure proper CORS handling for S3 URLs
+   ```html
+   <video src="..." crossorigin="anonymous" controls></video>
    ```
 
 ## Session Management
