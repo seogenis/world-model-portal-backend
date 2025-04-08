@@ -420,13 +420,13 @@ async def generate_upload_url():
                 "Key": key,
                 "ContentType": "video/mp4"
             },
-            ExpiresIn=300
+            ExpiresIn=10800
         )
 
         return {
             "upload_url": url,
             "file_key": key,
-            "expires_in": 300
+            "expires_in": 10800
         }
 
     except Exception as e:
