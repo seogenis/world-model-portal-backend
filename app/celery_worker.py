@@ -45,21 +45,22 @@ celery_app.conf.task_track_started = True
     autoretry_for=(Exception,),
     retry_kwargs={"max_retries": 3, "countdown": 15}
 )
-def run_video_generation(self, prompt: str, video_key: str = None) -> str:
+def run_video_generation(self, prompt: str, media_key: str = None) -> str:
     """
     Celery task to generate a video via VideoService and return the video URL.
     """
     try:
-        video_path = None
-        if video_key:  # If a video key is provided, download from S3
-            video_path = download_video_from_s3(video_key)
-            logger.info(f"Using video/image input from S3: {video_path}")
+        media_path = None
+        if media_key:  # If a video key is provided, download from S3
+            media_path = download_media_from_s3(media_key)
+            logger.info(f"Using video/image input from S3: {media_path}")
 
         service = VideoService()
 
         # Call the service's async method from sync context
         loop = asyncio.get_event_loop()
-        video_url = loop.run_until_complete(service._process_video_generation_job(prompt, video_path))
+        logger.warning(f"(celery worker) Starting with media path {media_path}")
+        video_url = loop.run_until_complete(service._process_video_generation_job(prompt, media_path))
 
         s3_key = upload_video_to_s3(video_url)
 
@@ -68,10 +69,6 @@ def run_video_generation(self, prompt: str, video_key: str = None) -> str:
         return f"ERROR: {str(e)}"
 
 def upload_video_to_s3(video_url: str) -> str:
-    """
-    Uploads the video file to S3 under a folder named with the job_id.
-    Returns the S3 key for the uploaded video.
-    """
     bucket_name = "cosmos-storage"
     s3_key = video_url
     local_file_path = "/workspace/world-model-portal-backend"+video_url
@@ -81,11 +78,11 @@ def upload_video_to_s3(video_url: str) -> str:
     except Exception as e:
         raise RuntimeError(f"Failed to upload video: {str(e)}")
 
-def download_video_from_s3(video_key: str) -> str:
+def download_media_from_s3(s3_key: str) -> str:
     bucket_name = "cosmos-storage"
-    local_file_path = video_key
+    local_file_path = s3_key
     try:
-        s3.download_file(bucket_name, video_key, local_file_path)
+        s3.download_file(bucket_name, s3_key, local_file_path)
         print(f"✅ File downloaded: {local_file_path}")
         return local_file_path
     except Exception as e:

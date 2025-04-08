@@ -493,13 +493,14 @@ class VideoService:
             except Exception as file_error:
                 logger.warning(f"Failed to save error details to file: {file_error}")
 
-    async def _process_video_generation_job(self, prompt: str, video_path: str) -> str:
+    async def _process_video_generation_job(self, prompt: str, media_path: str) -> str:
         """
         Wrapper that uses the existing method to generate a video from a prompt.
         Returns the final video_url on success.
         """
         job_id = str(uuid.uuid4())
-        await self._process_video_generation(job_id, prompt, video_path)
+        logger.warning(f"(wrapper function) Starting with media path {media_path}")
+        await self._process_video_generation(job_id, prompt, media_path)
         
         result = self.video_jobs.get(job_id)
         if not result:
