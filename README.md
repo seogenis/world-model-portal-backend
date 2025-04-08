@@ -102,13 +102,7 @@ The backend uses an asynchronous processing architecture to handle long-running 
 ### Video Generation
 
 - `POST /api/video/single_inference`: Generate a video from a text prompt
-- `GET /api/video/status/{job_id}`: Get video generation status with filesystem validation
-
-### Batch Processing
-
-- `POST /api/video/batch_inference`: Process multiple prompts in parallel (up to 8 GPUs)
-- `GET /api/video/batch_status/{batch_id}`: Get batch status with comprehensive filesystem scanning
-- `GET /api/video/batch_download/{batch_id}`: Download all batch videos as ZIP
+- `GET /api/video/status/{job_id}`: Get video generation status and S3 video URL
 - `POST /api/video/clean_expired`: Manually clean expired jobs from the queue
 
 ### Prompt Management
@@ -117,13 +111,19 @@ The backend uses an asynchronous processing architecture to handle long-running 
 - `POST /api/initialize`: Extract parameters from a prompt
 - `POST /api/update`: Update prompt based on user request
 - `POST /api/generate-variations`: Generate variations of selected prompts
-- `GET /api/parameters`: Get current parameters
-- `GET /api/history`: Get prompt history
+- `POST /api/parameters`: Get current parameters
+- `POST /api/history`: Get prompt history
 
-### Static Files
+### Session Management
 
-- `GET /api/videos/{video_id}`: Retrieve a generated video
-- `GET /static/*`: Static files (HTML, videos, etc.)
+- `GET /api/sessions`: List all active sessions
+- `DELETE /api/session/{session_id}`: Delete a specific session
+
+### Video Storage
+
+- All videos are stored in Amazon S3
+- Video URLs are provided via presigned S3 URLs in the status response
+- URLs typically expire after 5 minutes
 
 ## 🛠️ Key Components
 
@@ -227,20 +227,21 @@ async def _job_worker(self):
             # Handle worker errors...
 ```
 
-### Multi-GPU Batch Inference
+### S3 Video Storage Integration
 
-Batch processing distributes jobs across multiple GPUs:
+The system now uses Amazon S3 for video storage:
 
 ```python
-# Distribute jobs across GPUs
-for i, prompt in enumerate(prompts):
-    job_id = f"job_{i}"
-    gpu_id = i % self.num_gpus  # Assign to GPU
-    
-    # Start job on this GPU
-    task = asyncio.create_task(
-        self._process_single_job(batch_id, job_id, prompt, job_dir, gpu_id, websocket)
-    )
+# Upload generated video to S3
+def upload_video_to_s3(video_url: str) -> str:
+    bucket_name = "cosmos-storage"
+    s3_key = video_url
+    local_file_path = "/workspace/world-model-portal-backend"+video_url
+    try:
+        s3_client.upload_file(local_file_path, bucket_name, s3_key)
+        return s3_key
+    except Exception as e:
+        raise RuntimeError(f"Failed to upload video: {str(e)}")
 ```
 
 ## 📂 Project Structure
@@ -338,16 +339,16 @@ This implementation draws inspiration from a comprehensive design for a prompt-t
 5. **Optimization Strategies**: Model selection and caching for performance enhancement
 6. **Self-Healing Systems**: Robust recovery mechanisms to maintain state after restarts
 
-### Batch Video Generation
+### Video Generation Using Celery
 
-For high-throughput scenarios, the system supports parallel batch generation:
+The system uses Celery for asynchronous video generation tasks:
 
-1. Submit up to 8 prompts via batch endpoint
-2. Each prompt is assigned to a different GPU (0-7) for concurrent processing
-3. All jobs share the same global semaphore for NVIDIA API access
-4. Status updates are available via the batch_status endpoint
-5. All generated videos can be downloaded as a single ZIP file
-6. Directory structure preserves job organization even after service restarts
+1. Client submits a prompt through the API
+2. System submits a Celery task for processing
+3. Video generation task runs in a separate worker process
+4. Generated video is uploaded to S3 bucket
+5. Client polls status endpoint to get S3 URL when complete
+6. Presigned URLs are generated for secure, time-limited access
 
 ## 🚀 Deploying on Brev.dev
 
