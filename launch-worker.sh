@@ -1,4 +1,6 @@
 #!/bin/bash
+# chmod +x /workspace/world-model-portal-backend/launch-worker.sh
+
 
 echo "Starting celery worker"
 
