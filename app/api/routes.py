@@ -409,8 +409,14 @@ async def generate_single_video(
         raise HTTPException(status_code=500, detail=f"Error starting video generation: {str(e)}")
 
 @router.get("/video/upload-url")
-async def generate_upload_url():
-    key = f"uploads/{uuid.uuid4()}.mp4"
+async def generate_upload_url(video: bool):
+
+    if video:
+        content_type = "video/mp4"
+        key = f"uploads/{uuid.uuid4()}.mp4"
+    else:
+        content_type = "image/jpeg"
+        key = f"uploads/{uuid.uuid4()}.jpeg"
 
     try:
         url = s3.generate_presigned_url(
@@ -418,7 +424,7 @@ async def generate_upload_url():
             Params={
                 "Bucket": "cosmos-storage",
                 "Key": key,
-                "ContentType": "video/mp4"
+                "ContentType": content_type
             },
             ExpiresIn=10800
         )
