@@ -52,7 +52,7 @@ def run_video_generation(self, prompt: str, media_key: str = None) -> str:
     try:
         media_path = None
         if media_key:  # If a video key is provided, download from S3
-            media_path = download_media_from_s3(media_key)
+            media_path = "/workspace/world-model-portal-backend/"+download_media_from_s3(media_key)
             logger.info(f"Using video/image input from S3: {media_path}")
 
         service = VideoService()
