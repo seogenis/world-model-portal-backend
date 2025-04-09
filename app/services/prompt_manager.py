@@ -418,6 +418,8 @@ class PromptManager:
             )
             
             enhanced_prompt = response.choices[0].message.content
+            # Strip single and double quotation marks from the response
+            enhanced_prompt = enhanced_prompt.replace('"', '').replace("'", '')
             logger.info(f"Enhanced prompt: '{enhanced_prompt[:50]}...'")
             return enhanced_prompt
             

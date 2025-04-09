@@ -162,6 +162,9 @@ cython_debug/
 # Generated video files
 static/videos/
 
+# User uploaded files
+uploads/
+
 # VSCode
 .vscode/
 
