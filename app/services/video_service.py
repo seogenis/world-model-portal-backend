@@ -316,6 +316,12 @@ class VideoService:
                         f"--guidance 7 "
                         f"--seed 1 "
                         f"--prompt \"{prompt}\" "
+                        f"--guardrail_dir /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Guardrail/snapshots/*/ "
+                        f"--tokenizer_dir /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Tokenizer-CV8x8x8/snapshots/*/ "
+                        f"--prompt_upsampler_dir /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Prompt-Upsampler-12B-Text2World/snapshots/*/ "
+                        f"--nemo_checkpoint /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Diffusion-7B-Text2World/snapshots/*/nemo "
+                        f"--t5_cache_dir /workspace/checkpoints/hub/models--google-t5--t5-11b/snapshots/*/ "
+                        f"--cosmos_assets_dir /workspace/checkpoints "
                         f"> \"{log_file_path}\" 2>&1"
                     ]
                 else:  # video2world
@@ -335,6 +341,12 @@ class VideoService:
                         f"--conditioned_image_or_video_path \"{video_path}\" "
                         f"--num_input_frames {num_input_frames} "
                         f"--enable_prompt_upsampler "
+                        f"--guardrail_dir /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Guardrail/snapshots/*/ "
+                        f"--tokenizer_dir /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Tokenizer-CV8x8x8/snapshots/*/ "
+                        f"--prompt_upsampler_dir /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Prompt-Upsampler-12B-Text2World/snapshots/*/ "
+                        f"--nemo_checkpoint /workspace/checkpoints/hub/models--nvidia--Cosmos-1.0-Diffusion-7B-Video2World/snapshots/*/nemo "
+                        f"--t5_cache_dir /workspace/checkpoints/hub/models--google-t5--t5-11b/snapshots/*/ "
+                        f"--cosmos_assets_dir /workspace/checkpoints "
                         f"> \"{log_file_path}\" 2>&1"
                     ]
                 
