@@ -1,0 +1,5 @@
+drag code files into Cosmos/cosmos1/models/diffusion/nemo/inference
+1. disable guardrails
+2. preload model to optimzie for inference (developing)
+
+preload_model.sh drag into world-model-portal backend (developing)
